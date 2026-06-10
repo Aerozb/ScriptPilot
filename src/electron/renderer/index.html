@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ScriptPilot</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sider">
+        <div class="brand">
+          <div class="brand-mark">SP</div>
+          <div>
+            <strong>ScriptPilot</strong>
+            <span>本地脚本调度器</span>
+          </div>
+        </div>
+        <nav class="menu" aria-label="主菜单">
+          <button class="menu-item active" data-page="crontab"><span>⌁</span>定时任务</button>
+          <button class="menu-item" data-page="subscription"><span>⇄</span>订阅管理</button>
+          <button class="menu-item" data-page="env"><span>#</span>环境变量</button>
+          <button class="menu-item" data-page="config"><span>{}</span>配置文件</button>
+          <button class="menu-item" data-page="script"><span>JS</span>脚本管理</button>
+          <button class="menu-item" data-page="dependence"><span>⬡</span>依赖管理</button>
+          <button class="menu-item" data-page="log"><span>≡</span>日志管理</button>
+          <button class="menu-item" data-page="setting"><span>⚙</span>系统设置</button>
+        </nav>
+        <div class="sider-footer">
+          <span>接口</span>
+          <code id="sideApiUrl">http://127.0.0.1:18760</code>
+          <small>无登录、无权限校验，仅监听本机</small>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h1 id="pageTitle">定时任务</h1>
+            <p id="pageSubtitle">青龙式任务表格，支持批量运行、启停、删除和查看日志。</p>
+          </div>
+          <div class="top-actions">
+            <button class="ghost" id="refreshAllButton" type="button">刷新</button>
+            <button class="ghost" id="openDataButton" type="button">打开 data</button>
+            <button class="primary" id="quickRunButton" type="button">直接运行</button>
+          </div>
+        </header>
+
+        <section id="crontab" class="page active">
+          <div class="panel crontab-panel">
+            <div class="toolbar page-toolbar">
+              <div class="toolbar-left">
+                <input id="taskSearchInput" class="search" placeholder="请输入名称或者关键词" />
+                <button class="primary" id="taskSearchButton" type="button">搜索</button>
+                <button class="ghost" id="taskResetSearchButton" type="button">重置</button>
+              </div>
+              <div class="toolbar-right">
+                <button class="ghost" id="viewManageButton" type="button">视图管理</button>
+                <button class="primary" id="newTaskButton" type="button">创建任务</button>
+              </div>
+            </div>
+            <div id="taskViewTabs" class="view-tabs"></div>
+            <div id="taskBatchBar" class="batch-bar" hidden>
+              <button class="primary" id="batchDeleteTasksButton" type="button">批量删除</button>
+              <button class="ghost" id="batchEnableTasksButton" type="button">批量启用</button>
+              <button class="ghost" id="batchDisableTasksButton" type="button">批量禁用</button>
+              <button class="ghost" id="batchRunTasksButton" type="button">批量运行</button>
+              <button class="ghost" id="batchStopTasksButton" type="button">批量停止</button>
+              <button class="ghost" id="batchPinTasksButton" type="button">批量置顶</button>
+              <button class="ghost" id="batchUnpinTasksButton" type="button">批量取消置顶</button>
+              <button class="ghost" id="batchLabelsButton" type="button">批量修改标签</button>
+              <span id="taskSelectionText" class="selection-text">已选择 0 项</span>
+            </div>
+            <div id="taskTable" class="table-wrap"></div>
+            <div class="pagination-bar">
+              <span id="taskPaginationInfo" class="selection-text">第 0-0 条，总共 0 条</span>
+              <div class="toolbar-right">
+                <label class="inline-control">每页
+                  <select id="taskPageSizeInput">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="500">500</option>
+                  </select>
+                </label>
+                <button class="ghost" id="taskPrevPageButton" type="button">上一页</button>
+                <button class="ghost" id="taskNextPageButton" type="button">下一页</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="subscription" class="page">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <button class="primary" id="newSubscriptionButton" type="button">新建订阅</button>
+                <button class="ghost" id="batchRunSubscriptionsButton" type="button">运行</button>
+                <button class="danger" id="batchDeleteSubscriptionsButton" type="button">删除</button>
+              </div>
+              <div class="toolbar-right">
+                <span id="subscriptionSelectionText" class="selection-text">已选择 0 项</span>
+              </div>
+            </div>
+            <div id="subscriptionTable" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <section id="env" class="page">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <button class="primary" id="newEnvButton" type="button">新建变量</button>
+                <button class="ghost" id="batchEnableEnvsButton" type="button">启用</button>
+                <button class="ghost" id="batchDisableEnvsButton" type="button">禁用</button>
+                <button class="danger" id="batchDeleteEnvsButton" type="button">删除</button>
+              </div>
+              <div class="toolbar-right">
+                <input id="envSearchInput" class="search" placeholder="搜索变量名、值或备注" />
+                <span id="envSelectionText" class="selection-text">已选择 0 项</span>
+              </div>
+            </div>
+            <div id="envTable" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <section id="config" class="page">
+          <div class="split">
+            <div class="panel side-list">
+              <div class="toolbar compact">
+                <strong>配置文件</strong>
+                <button class="ghost" id="openConfigsDirButton" type="button">打开目录</button>
+                <button class="ghost" id="refreshConfigsButton" type="button">刷新</button>
+              </div>
+              <div id="configList" class="file-list"></div>
+            </div>
+            <div class="panel editor-panel">
+              <div class="toolbar">
+                <div>
+                  <strong id="configEditorTitle">请选择配置文件</strong>
+                  <small id="configEditorPath">data/configs</small>
+                </div>
+                <div class="toolbar-left">
+                  <button class="ghost" id="openCurrentConfigDirButton" type="button">打开所在目录</button>
+                  <button class="primary" id="saveConfigButton" type="button">保存配置</button>
+                </div>
+              </div>
+              <textarea id="configEditor" class="code-editor" spellcheck="false" placeholder="选择左侧配置文件后编辑"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section id="script" class="page">
+          <div class="split">
+            <div class="panel side-list">
+              <div class="toolbar compact">
+                <strong>脚本文件</strong>
+                <button class="ghost" id="openScriptsDirButton" type="button">打开目录</button>
+                <button class="primary" id="newScriptButton" type="button">新建</button>
+              </div>
+              <div id="scriptBatchBar" class="batch-bar script-batch-bar" hidden>
+                <label class="inline-check"><input id="selectAllScriptsInput" type="checkbox" />全选</label>
+                <button class="ghost" id="batchRunScriptsButton" type="button">批量运行</button>
+                <button class="danger" id="batchDeleteScriptsButton" type="button">批量删除</button>
+                <button class="ghost" id="clearScriptSelectionButton" type="button">清空选择</button>
+                <span id="scriptSelectionText" class="selection-text">已选择 0 项</span>
+              </div>
+              <div id="scriptList" class="file-list"></div>
+            </div>
+            <div class="panel editor-panel">
+              <div class="toolbar">
+                <div class="editor-title">
+                  <input id="scriptPathInput" class="flat-input" placeholder="data/scripts/example.js" />
+                  <small>所有脚本都保存在安装目录 data/scripts</small>
+                </div>
+                <div class="toolbar-left">
+                  <button class="ghost" id="openCurrentScriptDirButton" type="button">打开所在目录</button>
+                  <button class="ghost" id="runScriptFileButton" type="button">运行</button>
+                  <button class="primary" id="saveScriptButton" type="button">保存脚本</button>
+                  <button class="danger" id="deleteScriptButton" type="button">删除</button>
+                </div>
+              </div>
+              <textarea id="scriptEditor" class="code-editor" spellcheck="false" placeholder="console.log('hello ScriptPilot');"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section id="dependence" class="page">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <input id="dependencyNameInput" class="search" placeholder="输入 npm 包名，例如 axios" />
+                <button class="primary" id="installDependencyButton" type="button">安装依赖</button>
+              </div>
+              <span class="selection-text">依赖安装到 data/node_modules</span>
+            </div>
+            <div id="dependencyTable" class="table-wrap"></div>
+          </div>
+          <div class="panel history-panel">
+            <h2>依赖操作记录</h2>
+            <div id="dependencyHistory" class="timeline"></div>
+          </div>
+        </section>
+
+        <section id="log" class="page">
+          <div class="split">
+            <div class="panel side-list">
+              <div class="toolbar compact">
+                <strong>运行记录</strong>
+                <button class="ghost" id="refreshRunsButton" type="button">刷新</button>
+              </div>
+              <div id="runList" class="file-list"></div>
+            </div>
+            <div class="panel editor-panel">
+              <div class="toolbar">
+                <div>
+                  <strong id="logTitle">日志详情</strong>
+                  <small id="logMeta">选择左侧运行记录查看 stdout / stderr</small>
+                </div>
+                <button class="ghost" id="copyLogButton" type="button">复制日志</button>
+              </div>
+              <pre id="logViewer" class="terminal">暂无日志</pre>
+            </div>
+          </div>
+        </section>
+
+        <section id="setting" class="page">
+          <div class="settings-grid">
+            <div class="panel">
+              <h2>绿色目录</h2>
+              <div class="kv"><span>程序目录</span><code id="portableRoot"></code></div>
+              <div class="kv"><span>数据目录</span><code id="dataRoot"></code></div>
+              <div class="kv"><span>内置运行时</span><code id="runtimeRoot"></code></div>
+              <div class="kv"><span>本机接口</span><code id="apiUrl"></code></div>
+              <p class="hint">业务数据、日志、缓存、依赖和设置都写入安装目录下的 data，不写入 AppData。</p>
+            </div>
+
+            <div class="panel">
+              <h2>开机启动</h2>
+              <p id="startupStatus" class="notice">正在读取状态...</p>
+              <div class="actions-row">
+                <button class="primary" id="enableStartupButton" type="button">启用最高可用权限开机启动</button>
+                <button class="ghost" id="disableStartupButton" type="button">停用开机启动</button>
+              </div>
+            </div>
+
+            <div class="panel log-cleanup-panel">
+              <div class="log-cleanup-header">
+                <div>
+                  <h2>日志清理</h2>
+                  <p id="logCleanupStatus" class="log-cleanup-status">上次清理：尚未清理</p>
+                </div>
+                <button class="ghost" id="cleanupLogsNowButton" type="button">立即清理</button>
+              </div>
+              <div class="log-cleanup-toggle">
+                <label class="check-line full"><input id="logCleanupEnabledInput" type="checkbox" checked />启用定期日志清理</label>
+              </div>
+              <div class="form-grid log-cleanup-grid">
+                <label><span>日志保留天数</span><input id="logRetentionDaysInput" type="number" min="1" max="3650" value="30" /></label>
+                <label><span>清理周期天数</span><input id="logCleanupIntervalDaysInput" type="number" min="1" max="365" value="3" /></label>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h2>外观设置</h2>
+              <div class="form-grid">
+                <label><span>主题</span><select id="themeSelect"><option value="light">亮色</option><option value="dark">暗色</option></select></label>
+                <label><span>密度</span><select id="densitySelect"><option value="comfortable">标准</option><option value="compact">紧凑</option><option value="spacious">宽松</option></select></label>
+                <label><span>字体</span><select id="fontFamilySelect"><option value="Microsoft YaHei UI">微软雅黑 UI</option><option value="DengXian">等线</option><option value="Microsoft JhengHei UI">正黑 UI</option><option value="Noto Sans SC">思源黑体</option></select></label>
+                <label><span>强调色</span><select id="accentSelect"><option value="emerald">青龙绿</option><option value="blue">科技蓝</option><option value="orange">暖橙</option><option value="slate">石板灰</option></select></label>
+                <label><span>字号 <b id="fontScaleValue">100%</b></span><input id="fontScaleInput" type="range" min="90" max="120" value="100" /></label>
+                <label><span>圆角 <b id="radiusValue">18</b></span><input id="radiusInput" type="range" min="10" max="28" value="18" /></label>
+              </div>
+              <div class="actions-row">
+                <button class="primary" id="saveAppearanceButton" type="button">保存外观</button>
+                <span id="appearanceStatus" class="selection-text">未修改</span>
+              </div>
+            </div>
+
+            <div class="panel api-panel">
+              <h2>对外接口</h2>
+              <pre class="terminal small">POST http://127.0.0.1:18760/api/scripts/run
+Content-Type: application/json
+
+{
+  "name": "接口运行",
+  "scriptContent": "console.log(process.argv.slice(2)); console.log(process.env.SCRIPTPILOT_PARAMS)",
+  "args": ["参数1", "参数2"],
+  "params": {"来源": "API"},
+  "cwd": "data",
+  "dependencies": ["dayjs"],
+  "autoInstallDependencies": true,
+  "timeoutMs": 30000
+}</pre>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="taskModal" class="modal wide">
+      <form id="taskForm" method="dialog" class="modal-card">
+        <div class="modal-head">
+          <h2 id="taskModalTitle">新建定时任务</h2>
+          <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
+        </div>
+        <input id="taskIdInput" type="hidden" />
+        <div class="form-grid">
+          <label><span>任务名称</span><input id="taskNameInput" required value="我的脚本任务" /></label>
+          <label><span>定时类型</span><select id="taskScheduleTypeInput"><option value="normal">常规定时</option><option value="once">手动运行</option><option value="boot">开机运行</option></select></label>
+          <label><span>Cron 表达式</span><input id="taskCronInput" value="*/5 * * * *" placeholder="*/5 * * * *" /></label>
+          <label><span>实例模式</span><select id="taskInstanceModeInput"><option value="single">单实例</option><option value="multiple">多实例</option></select></label>
+          <label class="full"><span>脚本路径，可留空</span><input id="taskScriptPathInput" placeholder="data/scripts/task.js 或 C:\\scripts\\task.js" /></label>
+          <label class="full"><span>脚本内容，填写后会保存到 data/scripts/tasks</span><textarea id="taskScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
+console.log("定时任务执行成功");
+console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));</textarea></label>
+          <label><span>命令行参数，每行一个</span><textarea id="taskArgsInput" rows="4"></textarea></label>
+          <label><span>结构化参数 JSON</span><textarea id="taskParamsInput" rows="4">{
+  "来源": "定时任务"
+}</textarea></label>
+          <label><span>工作目录</span><input id="taskCwdInput" value="data" /></label>
+          <label><span>超时毫秒，0 表示不限制</span><input id="taskTimeoutInput" type="number" min="0" value="30000" /></label>
+          <label><span>额外定时规则，每行一个</span><textarea id="taskExtraSchedulesInput" rows="3" placeholder="0 8 * * *&#10;0 20 * * *"></textarea></label>
+          <label><span>标签，每行一个</span><textarea id="taskLabelsInput" rows="3" placeholder="签到&#10;重要"></textarea></label>
+          <label class="full"><span>声明依赖，每行一个，可留空</span><textarea id="taskDependenciesInput" rows="3" placeholder="axios&#10;dayjs"></textarea></label>
+          <label><span>日志名称</span><input id="taskLogNameInput" placeholder="可留空，默认自动生成" /></label>
+          <label><span>备注</span><input id="taskRemarkInput" placeholder="任务说明" /></label>
+          <label><span>执行前</span><textarea id="taskBeforeInput" rows="3" placeholder="运行任务前执行的说明或命令"></textarea></label>
+          <label><span>执行后</span><textarea id="taskAfterInput" rows="3" placeholder="运行任务后执行的说明或命令"></textarea></label>
+          <label class="check-line full"><input id="taskEnabledInput" type="checkbox" checked />启用定时运行</label>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" type="submit">保存任务</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="taskDetailModal" class="modal wide">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2 id="taskDetailTitle">任务详情</h2>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <div id="taskDetailBody" class="detail-grid"></div>
+        <div class="detail-tabs">
+          <button class="ghost active" id="detailLogTab" type="button">日志</button>
+          <button class="ghost" id="detailScriptTab" type="button">脚本</button>
+        </div>
+        <pre id="taskDetailContent" class="terminal detail-terminal">暂无内容</pre>
+        <div class="modal-actions">
+          <button class="ghost" id="detailEditTaskButton" type="button">编辑</button>
+          <button class="ghost" id="detailRunTaskButton" type="button">运行</button>
+          <button class="ghost" id="detailStopTaskButton" type="button">停止</button>
+          <button class="ghost" id="detailToggleTaskButton" type="button">禁用</button>
+          <button class="ghost" id="detailPinTaskButton" type="button">置顶</button>
+          <button class="primary" type="button" data-close-modal>知道了</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="labelModal" class="modal">
+      <form id="labelForm" method="dialog" class="modal-card narrow">
+        <div class="modal-head">
+          <h2>批量修改标签</h2>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <label><span>标签，每行一个</span><textarea id="labelInput" rows="5" placeholder="签到&#10;重要"></textarea></label>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="danger" id="removeLabelsButton" type="button">删除标签</button>
+          <button class="primary" type="submit">添加标签</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="viewModal" class="modal">
+      <form id="viewForm" method="dialog" class="modal-card">
+        <div class="modal-head">
+          <h2 id="viewModalTitle">创建视图</h2>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <input id="viewIdInput" type="hidden" />
+        <div class="form-grid">
+          <label><span>视图名称</span><input id="viewNameInput" required placeholder="例如：签到任务" /></label>
+          <label><span>筛选关系</span><select id="viewRelationInput"><option value="and">且</option><option value="or">或</option></select></label>
+          <label><span>字段</span><select id="viewFilterPropertyInput"><option value="name">名称</option><option value="scriptPath">命令/脚本</option><option value="cronExpression">定时规则</option><option value="status">状态</option><option value="labels">标签</option></select></label>
+          <label><span>操作符</span><select id="viewFilterOperationInput"><option value="Reg">包含</option><option value="NotReg">不包含</option><option value="In">属于</option><option value="Nin">不属于</option></select></label>
+          <label class="full"><span>筛选值，多个值用换行分隔</span><textarea id="viewFilterValueInput" rows="4" placeholder="签到&#10;重要"></textarea></label>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" type="submit">保存视图</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="viewManageModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>视图管理</h2>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <div class="toolbar compact">
+          <span class="selection-text">可创建、编辑、显示/隐藏和删除个人视图。全部任务为系统视图。</span>
+          <button class="primary" id="createViewButton" type="button">创建视图</button>
+        </div>
+        <div id="viewManageTable" class="table-wrap"></div>
+      </div>
+    </dialog>
+
+    <dialog id="runModal" class="modal">
+      <form id="runForm" method="dialog" class="modal-card">
+        <div class="modal-head">
+          <h2>直接运行脚本</h2>
+          <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
+        </div>
+        <div class="form-grid">
+          <label><span>运行名称</span><input id="runNameInput" value="手动运行脚本" /></label>
+          <label><span>超时毫秒</span><input id="runTimeoutInput" type="number" min="0" value="30000" /></label>
+          <label class="full"><span>脚本路径，可留空</span><input id="runScriptPathInput" placeholder="data/scripts/example.js" /></label>
+          <label class="full"><span>脚本内容，填写后优先运行内容</span><textarea id="runScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
+console.log("直接运行成功");
+console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea></label>
+          <label><span>命令行参数，每行一个</span><textarea id="runArgsInput" rows="4">参数A
+参数B</textarea></label>
+          <label><span>结构化参数 JSON</span><textarea id="runParamsInput" rows="4">{
+  "来源": "界面"
+}</textarea></label>
+          <label><span>工作目录</span><input id="runCwdInput" value="data" /></label>
+          <label><span>依赖，每行一个</span><textarea id="runDependenciesInput" rows="3" placeholder="axios&#10;dayjs"></textarea></label>
+          <label class="check-line full"><input id="runAutoInstallInput" type="checkbox" checked />缺依赖时自动安装到 data/node_modules</label>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" type="submit">运行</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="envModal" class="modal">
+      <form id="envForm" method="dialog" class="modal-card narrow">
+        <div class="modal-head">
+          <h2 id="envModalTitle">新建变量</h2>
+          <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
+        </div>
+        <input id="envIdInput" type="hidden" />
+        <label><span>变量名称</span><input id="envNameInput" required placeholder="JD_COOKIE" /></label>
+        <label><span>变量值</span><textarea id="envValueInput" rows="6"></textarea></label>
+        <label><span>备注</span><input id="envRemarksInput" /></label>
+        <label><span>状态</span><select id="envStatusInput"><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" type="submit">保存变量</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="subscriptionModal" class="modal">
+      <form id="subscriptionForm" method="dialog" class="modal-card narrow">
+        <div class="modal-head">
+          <h2 id="subscriptionModalTitle">新建订阅</h2>
+          <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
+        </div>
+        <input id="subscriptionIdInput" type="hidden" />
+        <label><span>订阅名称</span><input id="subscriptionNameInput" required /></label>
+        <label><span>订阅地址</span><input id="subscriptionUrlInput" placeholder="https://github.com/nodejs/examples/tree/main/cli/yargs/countEntriesInDirectory" /></label>
+        <label><span>分支</span><input id="subscriptionBranchInput" placeholder="main，GitHub tree/raw 地址可留空" /></label>
+        <label><span>Cron 表达式</span><input id="subscriptionScheduleInput" placeholder="0 0 * * *" /></label>
+        <label><span>状态</span><select id="subscriptionStatusInput"><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" type="submit">保存订阅</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="confirmModal" class="modal confirm-modal">
+      <div class="modal-card confirm-card">
+        <div class="confirm-hero">
+          <div id="confirmIcon" class="confirm-icon">?</div>
+          <div>
+            <h2 id="confirmTitle">请确认操作</h2>
+            <p id="confirmMessage">确认继续吗？</p>
+          </div>
+        </div>
+        <div id="confirmDetails" class="confirm-details" hidden></div>
+        <div class="modal-actions">
+          <button class="ghost" id="confirmCancelButton" type="button">取消</button>
+          <button class="primary" id="confirmOkButton" type="button">确定</button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,50 @@
+{
+  "name": "scriptpilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ScriptPilot 绿色版 NodeJS 脚本调度器。",
+  "main": "src/electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "demo": "node src/main/cli.js demo",
+    "list-tasks": "node src/main/cli.js list-tasks",
+    "list-runs": "node src/main/cli.js list-runs",
+    "dist:dir": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& electron-builder --dir && node tools/fix-portable-runtime.mjs && node tools/create-portable-layout.mjs && if exist release\\builder-debug.yml del /f /q release\\builder-debug.yml",
+    "dist:zip": "echo 已禁用压缩包生成，请使用 npm run dist:dir",
+    "dist": "npm run dist:dir"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "electron": "^36.4.0",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.60.0"
+  },
+  "build": {
+    "appId": "local.scriptpilot.desktop",
+    "productName": "ScriptPilot",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "package.json",
+      "src/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "runtime"
+      }
+    ],
+    "win": {
+      "requestedExecutionLevel": "highestAvailable",
+      "target": [
+        "dir"
+      ],
+      "artifactName": "ScriptPilot-${version}-${arch}.${ext}"
+    }
+  }
+}
