@@ -194,6 +194,15 @@ dependencySpecs.yargs: ^15.3.1
 output: 4
 ```
 
+订阅地址支持：
+
+```text
+https://github.com/shufflewzc/faker2.git
+shufflewzc/faker2.git
+git@github.com:shufflewzc/faker2.git
+ql repo https://github.com/shufflewzc/faker2.git "USER_AGENTS|function/common" "" "" ""
+```
+
 EXE smoke：
 
 ```powershell

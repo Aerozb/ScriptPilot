@@ -341,10 +341,111 @@ async function pullSubscriptionFiles(input) {
   };
 }
 
+function parseSubscriptionInput(subscription) {
+  const rawAddress = String(subscription.url || '').trim();
+  const command = parseQinglongRepoCommand(rawAddress);
+  return {
+    address: command?.address || rawAddress,
+    branch: String(subscription.branch || command?.branch || '').trim(),
+    filters: {
+      includePattern: String(subscription.includePattern || command?.includePattern || '').trim(),
+      excludePattern: String(subscription.excludePattern || command?.excludePattern || '').trim()
+    }
+  };
+}
+
+function parseQinglongRepoCommand(value) {
+  const tokens = splitCommandLine(value);
+  const repoIndex = tokens.findIndex((token) => token.toLowerCase() === 'repo');
+  if (repoIndex < 0) return undefined;
+
+  const sourceIndex = tokens.findIndex((token, index) => index > repoIndex && looksLikeSubscriptionAddress(token));
+  if (sourceIndex < 0) return undefined;
+
+  const extras = tokens.slice(sourceIndex + 1);
+  return {
+    address: tokens[sourceIndex],
+    includePattern: extras[0] || '',
+    excludePattern: extras[1] || '',
+    dependencyPattern: extras[2] || '',
+    branch: extras[3] || ''
+  };
+}
+
+function splitCommandLine(value) {
+  const tokens = [];
+  let token = '';
+  let quote = '';
+  let hasToken = false;
+
+  for (const char of String(value || '')) {
+    if (quote) {
+      if (char === quote) {
+        quote = '';
+      } else {
+        token += char;
+      }
+      hasToken = true;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      hasToken = true;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (hasToken) {
+        tokens.push(token);
+        token = '';
+        hasToken = false;
+      }
+      continue;
+    }
+
+    token += char;
+    hasToken = true;
+  }
+
+  if (hasToken) tokens.push(token);
+  return tokens;
+}
+
+function looksLikeSubscriptionAddress(value) {
+  const trimmed = String(value || '').trim();
+  return /^https?:\/\//i.test(trimmed) ||
+    /^git@github\.com:/i.test(trimmed) ||
+    /^ssh:\/\/git@github\.com\//i.test(trimmed) ||
+    /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?$/i.test(trimmed);
+}
+
+function parseGitHubShorthandSource(parsedInput, subscription) {
+  const address = String(parsedInput.address || '').trim();
+  const sshMatch = address.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i) ||
+    address.match(/^ssh:\/\/git@github\.com\/([^/]+)\/(.+?)(?:\.git)?$/i);
+  const shortMatch = address.match(/^([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?$/i);
+  const match = sshMatch || shortMatch;
+  if (!match) return undefined;
+
+  return {
+    type: 'github-repo',
+    owner: match[1],
+    repo: match[2].replace(/\.git$/i, ''),
+    branch: parsedInput.branch || String(subscription.branch || '').trim() || undefined,
+    subPath: '',
+    filters: parsedInput.filters
+  };
+}
+
 function parseSubscriptionSource(subscription) {
+  const parsedInput = parseSubscriptionInput(subscription);
+  const shorthandSource = parseGitHubShorthandSource(parsedInput, subscription);
+  if (shorthandSource) return shorthandSource;
+
   let parsed;
   try {
-    parsed = new URL(subscription.url);
+    parsed = new URL(parsedInput.address);
   } catch {
     throw new AppError('INVALID_SUBSCRIPTION_URL', '订阅地址必须是 http 或 https 地址');
   }
@@ -364,7 +465,8 @@ function parseSubscriptionSource(subscription) {
       repo: segments[1],
       branch: segments[2],
       repoPath: segments.slice(3).join('/'),
-      rawUrl: parsed.toString()
+      rawUrl: parsed.toString(),
+      filters: parsedInput.filters
     };
   }
 
@@ -374,7 +476,7 @@ function parseSubscriptionSource(subscription) {
       throw new AppError('INVALID_GITHUB_URL', 'GitHub 地址需要包含 owner/repo');
     }
 
-    const branch = String(subscription.branch || '').trim();
+    const branch = String(subscription.branch || parsedInput.branch || '').trim();
     if (segments[2] === 'blob' || segments[2] === 'raw') {
       if (segments.length < 5) throw new AppError('INVALID_GITHUB_FILE_URL', 'GitHub 文件地址格式不正确');
       return {
@@ -382,7 +484,8 @@ function parseSubscriptionSource(subscription) {
         owner: segments[0],
         repo: segments[1],
         branch: branch || segments[3],
-        repoPath: segments.slice(4).join('/')
+        repoPath: segments.slice(4).join('/'),
+        filters: parsedInput.filters
       };
     }
 
@@ -393,7 +496,8 @@ function parseSubscriptionSource(subscription) {
         owner: segments[0],
         repo: segments[1],
         branch: branch || segments[3],
-        subPath: segments.slice(4).join('/')
+        subPath: segments.slice(4).join('/'),
+        filters: parsedInput.filters
       };
     }
 
@@ -401,8 +505,9 @@ function parseSubscriptionSource(subscription) {
       type: 'github-repo',
       owner: segments[0],
       repo: segments[1],
-      branch: branch || 'main',
-      subPath: ''
+      branch: branch || parsedInput.branch || undefined,
+      subPath: '',
+      filters: parsedInput.filters
     };
   }
 
@@ -421,21 +526,22 @@ async function downloadSubscriptionSource(source, targetRoot) {
 }
 
 async function downloadGitHubRepository(source, targetRoot) {
+  const branch = await resolveGitHubBranch(source);
   const tree = await fetchJson(
-    `https://api.github.com/repos/${source.owner}/${source.repo}/git/trees/${encodeURIComponent(source.branch)}?recursive=1`,
+    `https://api.github.com/repos/${source.owner}/${source.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
     '读取 GitHub 仓库目录失败'
   );
   const prefix = normalizeRepoPath(source.subPath);
   const fileEntries = (tree.tree || [])
     .filter((entry) => entry.type === 'blob')
-    .filter((entry) => pathShouldBePulled(entry.path))
+    .filter((entry) => pathShouldBePulled(entry.path, source.filters))
     .filter((entry) => !prefix || entry.path === prefix || entry.path.startsWith(`${prefix}/`))
     .slice(0, MAX_SUBSCRIPTION_FILES);
 
   const written = [];
   for (const entry of fileEntries) {
     const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\/+/, '') : entry.path;
-    const rawUrl = createGitHubRawUrl(source.owner, source.repo, source.branch, entry.path);
+    const rawUrl = createGitHubRawUrl(source.owner, source.repo, branch, entry.path);
     await writeRemoteFile({
       url: rawUrl,
       targetRoot,
@@ -448,10 +554,11 @@ async function downloadGitHubRepository(source, targetRoot) {
 
 async function downloadGitHubFile(source, targetRoot) {
   const repoPath = normalizeRepoPath(source.repoPath);
-  if (!pathShouldBePulled(repoPath)) {
+  if (!pathShouldBePulled(repoPath, source.filters)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '订阅文件只支持 .js、.mjs、.cjs 或 package.json');
   }
-  const rawUrl = source.rawUrl || createGitHubRawUrl(source.owner, source.repo, source.branch, repoPath);
+  const branch = source.branch || await resolveGitHubBranch(source);
+  const rawUrl = source.rawUrl || createGitHubRawUrl(source.owner, source.repo, branch, repoPath);
   const relativePath = path.posix.basename(repoPath);
   await writeRemoteFile({
     url: rawUrl,
@@ -520,15 +627,57 @@ async function fetchText(url, errorMessage) {
   return response.text();
 }
 
+async function resolveGitHubBranch(source) {
+  if (source.branch) return source.branch;
+  const repository = await fetchJson(
+    `https://api.github.com/repos/${source.owner}/${source.repo}`,
+    '读取 GitHub 仓库信息失败'
+  );
+  return repository.default_branch || 'main';
+}
+
 function createGitHubRawUrl(owner, repo, branch, repoPath) {
   return `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${repoPath.split('/').map(encodeURIComponent).join('/')}`;
 }
 
-function pathShouldBePulled(value) {
+function pathShouldBePulled(value, filters = {}) {
   const normalized = normalizeRelativePath(value);
   const basename = path.posix.basename(normalized).toLowerCase();
   const ext = path.posix.extname(basename);
-  return SCRIPT_SUBSCRIPTION_EXTENSIONS.has(ext) || SUBSCRIPTION_SUPPORT_FILES.has(basename);
+  const supported = SCRIPT_SUBSCRIPTION_EXTENSIONS.has(ext) || SUBSCRIPTION_SUPPORT_FILES.has(basename);
+  if (!supported) return false;
+  return passesSubscriptionFilters(normalized, filters);
+}
+
+function passesSubscriptionFilters(relativePath, filters = {}) {
+  const includePattern = String(filters.includePattern || '').trim();
+  const excludePattern = String(filters.excludePattern || '').trim();
+  if (includePattern && !matchesSubscriptionPattern(includePattern, relativePath)) return false;
+  if (excludePattern && matchesSubscriptionPattern(excludePattern, relativePath)) return false;
+  return true;
+}
+
+function matchesSubscriptionPattern(pattern, relativePath) {
+  const normalized = relativePath.replaceAll('\\', '/');
+  const basename = path.posix.basename(normalized);
+  const parts = String(pattern || '')
+    .split(/\r?\n|,/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  for (const part of parts.length ? parts : [String(pattern || '').trim()]) {
+    if (!part) continue;
+    try {
+      const regex = new RegExp(part, 'i');
+      if (regex.test(normalized) || regex.test(basename)) return true;
+    } catch {
+      if (normalized.toLowerCase().includes(part.toLowerCase()) || basename.toLowerCase().includes(part.toLowerCase())) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function normalizeRepoPath(value) {
