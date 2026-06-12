@@ -4,6 +4,8 @@ export class Run {
   constructor(props) {
     this.id = props.id;
     this.taskId = props.taskId;
+    this.name = props.name;
+    this.scriptPath = props.scriptPath;
     this.trigger = props.trigger;
     this.status = props.status;
     this.pid = props.pid;
@@ -23,6 +25,8 @@ export class Run {
     return new Run({
       id: input.id || randomUUID(),
       taskId: input.taskId,
+      name: input.name,
+      scriptPath: input.scriptPath,
       trigger: input.trigger,
       status: 'running',
       startedAt: now.toISOString(),
@@ -65,6 +69,8 @@ export class Run {
     return {
       id: this.id,
       taskId: this.taskId,
+      name: this.name,
+      scriptPath: this.scriptPath,
       trigger: this.trigger,
       status: this.status,
       pid: this.pid,

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { URL } from 'node:url';
 import { JsonStore } from '../../../shared/infrastructure/filesystem/json-store.js';
@@ -15,9 +15,12 @@ const DEFAULT_CONFIGS = {
   'extra.sh': '# 自定义 Shell 配置\n',
   'package.json': '{\n  "dependencies": {}\n}\n'
 };
+const DEFAULT_SCRIPT_SUPPORT_FILES = {
+  'sendNotify.js': `async function sendNotify(title, content) {\n  console.log(\`[sendNotify] \${title}: \${content}\`);\n}\n\nmodule.exports = { sendNotify };\n`
+};
 const SCRIPT_SUBSCRIPTION_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
-const MAX_SUBSCRIPTION_FILES = 500;
+const MAX_REPOSITORY_FILES = 2000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
 
 export class LocalQinglongService {
@@ -28,6 +31,8 @@ export class LocalQinglongService {
     this.dependencyHistoryStore = new JsonStore(path.join(paths.appStateRoot, 'dependency-history.json'), []);
     this.configRoot = path.join(paths.dataRoot, 'configs');
     this.scriptRoot = paths.scriptsRoot;
+    this.repoRoot = paths.repoRoot;
+    this.rawRoot = paths.rawRoot;
   }
 
   async getOverview() {
@@ -158,10 +163,13 @@ export class LocalQinglongService {
 
   async deleteScripts(paths = []) {
     for (const item of paths) {
-      const filePath = path.join(this.scriptRoot, normalizeRelative(stripScriptPrefix(item)));
+      const relativePath = normalizeRelative(stripScriptPrefix(item));
+      if (!relativePath) throw new AppError('INVALID_SCRIPT_PATH', '不能删除 data/scripts 根目录');
+      const filePath = path.join(this.scriptRoot, relativePath);
       await assertInside(this.scriptRoot, filePath);
-      await rm(filePath, { force: true });
+      await rm(filePath, { recursive: true, force: true });
     }
+    await pruneEmptyDirectories(this.scriptRoot);
     return { deleted: paths.length };
   }
 
@@ -177,6 +185,11 @@ export class LocalQinglongService {
     const id = input.id || randomUUID();
     const index = rows.findIndex((item) => item.id === id);
     const existing = index >= 0 ? rows[index] : {};
+    const source = parseSubscriptionSource({
+      ...existing,
+      ...input
+    });
+    const subscriptionFolder = createSubscriptionFolder(input.name, id, source);
     const next = {
       ...existing,
       id,
@@ -185,11 +198,12 @@ export class LocalQinglongService {
       branch: String(input.branch ?? ''),
       schedule: String(input.schedule ?? ''),
       status: input.status === 'disabled' ? 'disabled' : 'enabled',
-      subscriptionFolder: existing.subscriptionFolder || createSubscriptionFolder(input.name, id),
+      subscriptionFolder,
       lastPulledAt: input.lastPulledAt || existing.lastPulledAt,
       lastResult: existing.lastResult,
       lastFiles: existing.lastFiles || [],
-      localPath: existing.localPath,
+      localPath: `data/scripts/${subscriptionFolder}`,
+      repoPath: getSubscriptionSourceCachePath(source, subscriptionFolder),
       createdAt: existing.createdAt || input.createdAt || now,
       updatedAt: now
     };
@@ -205,9 +219,16 @@ export class LocalQinglongService {
     const rowsToDelete = rows.filter((item) => idSet.has(item.id));
     for (const row of rowsToDelete) {
       if (!row.subscriptionFolder) continue;
-      const folderPath = path.join(this.scriptRoot, 'subscriptions', sanitizePathPart(row.subscriptionFolder));
-      await assertInside(this.scriptRoot, folderPath);
-      await rm(folderPath, { recursive: true, force: true });
+      const subscriptionFolder = sanitizePathPart(row.subscriptionFolder);
+      const scriptFolderPath = path.join(this.scriptRoot, subscriptionFolder);
+      const repoFolderPath = path.join(this.repoRoot, subscriptionFolder);
+      const rawFilePath = path.join(this.rawRoot, `${subscriptionFolder}.js`);
+      await assertInside(this.scriptRoot, scriptFolderPath);
+      await assertInside(this.repoRoot, repoFolderPath);
+      await assertInside(this.rawRoot, rawFilePath);
+      await rm(scriptFolderPath, { recursive: true, force: true });
+      await rm(repoFolderPath, { recursive: true, force: true });
+      await rm(rawFilePath, { force: true });
     }
     await this.subscriptionStore.write(rows.filter((item) => !idSet.has(item.id)));
     return { deleted: ids.length };
@@ -220,12 +241,15 @@ export class LocalQinglongService {
     try {
       const result = await pullSubscriptionFiles({
         subscription: rows[index],
-        scriptRoot: this.scriptRoot
+        scriptRoot: this.scriptRoot,
+        repoRoot: this.repoRoot,
+        rawRoot: this.rawRoot
       });
       rows[index] = {
         ...rows[index],
         subscriptionFolder: result.subscriptionFolder,
         localPath: result.localPath,
+        repoPath: result.repoPath,
         lastPulledAt: new Date().toISOString(),
         lastResult: `已拉取 ${result.files.length} 个文件到 ${result.localPath}`,
         lastFiles: result.files,
@@ -262,8 +286,7 @@ export class LocalQinglongService {
   async installDependency(name) {
     if (!name || !String(name).trim()) throw new AppError('INVALID_DEPENDENCY_NAME', '依赖名称不能为空');
     const runtime = await resolveNodeRuntime(this.paths);
-    const npmPath = path.join(path.dirname(runtime.nodePath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
-    await runProcess(npmPath, ['install', String(name).trim(), '--prefix', this.paths.dataRoot, '--cache', path.join(this.paths.cacheRoot, 'npm')], this.paths);
+    await runNpmCommand(runtime.nodePath, ['install', String(name).trim(), '--prefix', this.paths.dataRoot, '--cache', path.join(this.paths.cacheRoot, 'npm'), '--no-audit', '--no-fund', '--save-prod'], this.paths);
     await this.appendDependencyHistory({ action: 'install', name: String(name).trim(), status: 'success' });
     return this.listDependencies();
   }
@@ -271,8 +294,7 @@ export class LocalQinglongService {
   async removeDependency(name) {
     if (!name || !String(name).trim()) throw new AppError('INVALID_DEPENDENCY_NAME', '依赖名称不能为空');
     const runtime = await resolveNodeRuntime(this.paths);
-    const npmPath = path.join(path.dirname(runtime.nodePath), process.platform === 'win32' ? 'npm.cmd' : 'npm');
-    await runProcess(npmPath, ['uninstall', String(name).trim(), '--prefix', this.paths.dataRoot, '--cache', path.join(this.paths.cacheRoot, 'npm')], this.paths);
+    await runNpmCommand(runtime.nodePath, ['uninstall', String(name).trim(), '--prefix', this.paths.dataRoot, '--cache', path.join(this.paths.cacheRoot, 'npm'), '--no-audit', '--no-fund', '--save-prod'], this.paths);
     await this.appendDependencyHistory({ action: 'remove', name: String(name).trim(), status: 'success' });
     return this.listDependencies();
   }
@@ -287,6 +309,18 @@ export class LocalQinglongService {
     await mkdir(this.configRoot, { recursive: true });
     for (const [name, content] of Object.entries(DEFAULT_CONFIGS)) {
       const filePath = path.join(this.configRoot, name);
+      try {
+        await access(filePath, constants.R_OK);
+      } catch {
+        await writeFile(filePath, content, 'utf8');
+      }
+    }
+  }
+
+  async ensureScriptSupportFiles() {
+    await mkdir(this.scriptRoot, { recursive: true });
+    for (const [name, content] of Object.entries(DEFAULT_SCRIPT_SUPPORT_FILES)) {
+      const filePath = path.join(this.scriptRoot, name);
       try {
         await access(filePath, constants.R_OK);
       } catch {
@@ -322,22 +356,49 @@ async function pullSubscriptionFiles(input) {
   }
 
   const source = parseSubscriptionSource(input.subscription);
-  const subscriptionFolder = input.subscription.subscriptionFolder || createSubscriptionFolder(input.subscription.name, input.subscription.id);
-  const targetRoot = path.join(input.scriptRoot, 'subscriptions', sanitizePathPart(subscriptionFolder));
-  await assertInside(input.scriptRoot, targetRoot);
-  await rm(targetRoot, { recursive: true, force: true });
-  await mkdir(targetRoot, { recursive: true });
+  const subscriptionFolder = createSubscriptionFolder(input.subscription.name, input.subscription.id, source);
+  const previousFolder = input.subscription.subscriptionFolder ? sanitizePathPart(input.subscription.subscriptionFolder) : '';
+  const repoRoot = input.repoRoot || path.join(path.dirname(input.scriptRoot), 'repo');
+  const rawRoot = input.rawRoot || path.join(path.dirname(input.scriptRoot), 'raw');
+  const scriptTargetRoot = path.join(input.scriptRoot, sanitizePathPart(subscriptionFolder));
+  const repoTargetRoot = path.join(repoRoot, sanitizePathPart(subscriptionFolder));
+  const rawTargetPath = path.join(rawRoot, `${sanitizePathPart(subscriptionFolder)}.js`);
+  await mkdir(repoRoot, { recursive: true });
+  await mkdir(rawRoot, { recursive: true });
+  await mkdir(input.scriptRoot, { recursive: true });
+  for (const folder of new Set([previousFolder, sanitizePathPart(subscriptionFolder)].filter(Boolean))) {
+    const scriptFolderPath = path.join(input.scriptRoot, folder);
+    const repoFolderPath = path.join(repoRoot, folder);
+    const rawFilePath = path.join(rawRoot, `${folder}.js`);
+    await assertInside(input.scriptRoot, scriptFolderPath);
+    await assertInside(repoRoot, repoFolderPath);
+    await assertInside(rawRoot, rawFilePath);
+    await rm(scriptFolderPath, { recursive: true, force: true });
+    await rm(repoFolderPath, { recursive: true, force: true });
+    await rm(rawFilePath, { force: true });
+  }
+  await mkdir(scriptTargetRoot, { recursive: true });
 
-  const files = await downloadSubscriptionSource(source, targetRoot);
+  const result = await downloadSubscriptionSource(source, {
+    repoRoot: repoTargetRoot,
+    rawRoot,
+    rawFilePath: rawTargetPath,
+    scriptRoot: scriptTargetRoot,
+    subscriptionFolder
+  });
+  const files = result.files;
   if (!files.length) {
     throw new AppError('SUBSCRIPTION_EMPTY', '订阅源没有找到可导入的 NodeJS 脚本文件');
   }
 
+  await ensureSubscriptionSupportFiles(scriptTargetRoot);
+
   return {
     subscriptionFolder,
     sourceType: source.type,
-    localPath: `data/scripts/subscriptions/${subscriptionFolder}`,
-    files: files.map((file) => `data/scripts/subscriptions/${subscriptionFolder}/${file}`.replaceAll('\\', '/'))
+    localPath: `data/scripts/${subscriptionFolder}`,
+    repoPath: result.repoPath,
+    files: files.map((file) => `data/scripts/${subscriptionFolder}/${file}`.replaceAll('\\', '/'))
   };
 }
 
@@ -346,6 +407,7 @@ function parseSubscriptionInput(subscription) {
   const command = parseQinglongRepoCommand(rawAddress);
   return {
     address: command?.address || rawAddress,
+    commandType: command?.commandType,
     branch: String(subscription.branch || command?.branch || '').trim(),
     filters: {
       includePattern: String(subscription.includePattern || command?.includePattern || '').trim(),
@@ -356,14 +418,23 @@ function parseSubscriptionInput(subscription) {
 
 function parseQinglongRepoCommand(value) {
   const tokens = splitCommandLine(value);
-  const repoIndex = tokens.findIndex((token) => token.toLowerCase() === 'repo');
-  if (repoIndex < 0) return undefined;
+  const commandIndex = tokens.findIndex((token) => ['repo', 'raw'].includes(token.toLowerCase()));
+  if (commandIndex < 0) return undefined;
 
-  const sourceIndex = tokens.findIndex((token, index) => index > repoIndex && looksLikeSubscriptionAddress(token));
+  const sourceIndex = tokens.findIndex((token, index) => index > commandIndex && looksLikeSubscriptionAddress(token));
   if (sourceIndex < 0) return undefined;
 
   const extras = tokens.slice(sourceIndex + 1);
+  const commandType = tokens[commandIndex].toLowerCase();
+  if (commandType === 'raw') {
+    return {
+      commandType,
+      address: tokens[sourceIndex]
+    };
+  }
+
   return {
+    commandType,
     address: tokens[sourceIndex],
     includePattern: extras[0] || '',
     excludePattern: extras[1] || '',
@@ -454,6 +525,14 @@ function parseSubscriptionSource(subscription) {
     throw new AppError('INVALID_SUBSCRIPTION_URL', '订阅地址只支持 http 和 https');
   }
 
+  if (parsedInput.commandType === 'raw') {
+    return {
+      type: 'http-file',
+      url: parsed.toString(),
+      fileName: path.posix.basename(decodeURIComponent(parsed.pathname)) || 'downloaded-script.js'
+    };
+  }
+
   if (parsed.hostname === 'raw.githubusercontent.com') {
     const segments = parsed.pathname.split('/').filter(Boolean);
     if (segments.length < 4) {
@@ -518,41 +597,50 @@ function parseSubscriptionSource(subscription) {
   };
 }
 
-async function downloadSubscriptionSource(source, targetRoot) {
-  if (source.type === 'github-repo') return downloadGitHubRepository(source, targetRoot);
-  if (source.type === 'github-file' || source.type === 'github-raw-file') return downloadGitHubFile(source, targetRoot);
-  if (source.type === 'http-file') return downloadHttpFile(source, targetRoot);
+async function downloadSubscriptionSource(source, targets) {
+  if (source.type === 'github-repo') return downloadGitHubRepository(source, targets);
+  if (source.type === 'github-file' || source.type === 'github-raw-file') return downloadGitHubFile(source, targets);
+  if (source.type === 'http-file') return downloadHttpFile(source, targets);
   throw new AppError('UNSUPPORTED_SUBSCRIPTION_SOURCE', '不支持的订阅源类型');
 }
 
-async function downloadGitHubRepository(source, targetRoot) {
+async function downloadGitHubRepository(source, targets) {
   const branch = await resolveGitHubBranch(source);
   const tree = await fetchJson(
     `https://api.github.com/repos/${source.owner}/${source.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
     '读取 GitHub 仓库目录失败'
   );
   const prefix = normalizeRepoPath(source.subPath);
-  const fileEntries = (tree.tree || [])
+  const repoEntries = (tree.tree || [])
     .filter((entry) => entry.type === 'blob')
-    .filter((entry) => pathShouldBePulled(entry.path, source.filters))
     .filter((entry) => !prefix || entry.path === prefix || entry.path.startsWith(`${prefix}/`))
-    .slice(0, MAX_SUBSCRIPTION_FILES);
+    .slice(0, MAX_REPOSITORY_FILES);
 
   const written = [];
-  for (const entry of fileEntries) {
+  for (const entry of repoEntries) {
     const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\/+/, '') : entry.path;
     const rawUrl = createGitHubRawUrl(source.owner, source.repo, branch, entry.path);
     await writeRemoteFile({
       url: rawUrl,
-      targetRoot,
+      targetRoot: targets.repoRoot,
       relativePath
     });
-    written.push(normalizeRelativePath(relativePath));
+    if (pathShouldBePulled(relativePath, source.filters)) {
+      await copySubscriptionScript({
+        sourceRoot: targets.repoRoot,
+        targetRoot: targets.scriptRoot,
+        relativePath
+      });
+      written.push(normalizeRelativePath(relativePath));
+    }
   }
-  return written;
+  return {
+    repoPath: `data/repo/${targets.subscriptionFolder}`,
+    files: written
+  };
 }
 
-async function downloadGitHubFile(source, targetRoot) {
+async function downloadGitHubFile(source, targets) {
   const repoPath = normalizeRepoPath(source.repoPath);
   if (!pathShouldBePulled(repoPath, source.filters)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '订阅文件只支持 .js、.mjs、.cjs 或 package.json');
@@ -562,23 +650,35 @@ async function downloadGitHubFile(source, targetRoot) {
   const relativePath = path.posix.basename(repoPath);
   await writeRemoteFile({
     url: rawUrl,
-    targetRoot,
+    targetRoot: targets.repoRoot,
     relativePath
   });
-  return [relativePath];
+  await copySubscriptionScript({
+    sourceRoot: targets.repoRoot,
+    targetRoot: targets.scriptRoot,
+    relativePath
+  });
+  return {
+    repoPath: `data/repo/${targets.subscriptionFolder}`,
+    files: [relativePath]
+  };
 }
 
-async function downloadHttpFile(source, targetRoot) {
+async function downloadHttpFile(source, targets) {
   const relativePath = sanitizePathPart(source.fileName);
   if (!pathShouldBePulled(relativePath)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '普通 HTTP 订阅只支持 .js、.mjs、.cjs 或 package.json');
   }
   await writeRemoteFile({
     url: source.url,
-    targetRoot,
-    relativePath
+    targetRoot: targets.rawRoot,
+    relativePath: path.basename(targets.rawFilePath)
   });
-  return [relativePath];
+  await copySingleFile(targets.rawFilePath, path.join(targets.scriptRoot, relativePath), targets.scriptRoot);
+  return {
+    repoPath: `data/raw/${path.basename(targets.rawFilePath)}`,
+    files: [relativePath]
+  };
 }
 
 async function writeRemoteFile(input) {
@@ -693,9 +793,38 @@ function normalizeRelativePath(value) {
     .join('/');
 }
 
-function createSubscriptionFolder(name, id) {
+function getSubscriptionSourceCachePath(source, subscriptionFolder) {
+  if (source?.type === 'http-file') return `data/raw/${subscriptionFolder}.js`;
+  return `data/repo/${subscriptionFolder}`;
+}
+
+function createSubscriptionFolder(name, id, source = undefined) {
+  const namedFolder = sanitizePathPart(name);
+  if (namedFolder) return namedFolder;
+  if (source?.owner && source?.repo) {
+    const owner = sanitizePathPart(source.owner);
+    const repo = sanitizePathPart(source.repo);
+    const branch = sanitizePathPart(source.branch);
+    return [owner, repo, branch].filter(Boolean).join('_');
+  }
   const base = sanitizePathPart(name) || 'subscription';
   return `${base}-${String(id || randomUUID()).slice(0, 8)}`;
+}
+
+async function pruneEmptyDirectories(root) {
+  await removeEmptyChildren(root, root);
+}
+
+async function removeEmptyChildren(root, current) {
+  await assertInside(root, current);
+  const entries = await readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const fullPath = path.join(current, entry.name);
+    await removeEmptyChildren(root, fullPath);
+    const remaining = await readdir(fullPath);
+    if (remaining.length === 0) await rmdir(fullPath);
+  }
 }
 
 function sanitizePathPart(value) {
@@ -733,6 +862,31 @@ async function readJsonOptional(filePath, fallback) {
   }
 }
 
+async function ensureSubscriptionSupportFiles(scriptTargetRoot) {
+  await mkdir(scriptTargetRoot, { recursive: true });
+  for (const [name, content] of Object.entries(DEFAULT_SCRIPT_SUPPORT_FILES)) {
+    const filePath = path.join(scriptTargetRoot, name);
+    try {
+      await access(filePath, constants.R_OK);
+    } catch {
+      await writeFile(filePath, content, 'utf8');
+    }
+  }
+}
+
+async function copySubscriptionScript(input) {
+  const sourcePath = path.join(input.sourceRoot, normalizeRelativePath(input.relativePath));
+  const targetPath = path.join(input.targetRoot, normalizeRelativePath(input.relativePath));
+  await copySingleFile(sourcePath, targetPath, input.targetRoot);
+}
+
+async function copySingleFile(sourcePath, targetPath, root) {
+  await assertInside(root, targetPath);
+  await mkdir(path.dirname(targetPath), { recursive: true });
+  const content = await readFile(sourcePath, 'utf8');
+  await writeFile(targetPath, content, 'utf8');
+}
+
 function runProcess(command, args, paths) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -748,6 +902,58 @@ function runProcess(command, args, paths) {
     child.on('close', (code) => {
       if (code === 0) resolve();
       else reject(new AppError('DEPENDENCY_COMMAND_FAILED', stderr || `依赖命令失败，退出码 ${code}`));
+    });
+  });
+}
+
+async function runNpmCommand(nodePath, npmArgs, paths) {
+  const npmCliPath = path.join(path.dirname(nodePath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  try {
+    await access(npmCliPath, constants.R_OK);
+  } catch {
+    throw new AppError('NPM_NOT_FOUND', '内置 npm 不存在，无法安装依赖', { npmCliPath });
+  }
+
+  await mkdir(path.join(paths.cacheRoot, 'npm'), { recursive: true });
+  return new Promise((resolve, reject) => {
+    const child = spawn(nodePath, [npmCliPath, ...npmArgs], {
+      cwd: paths.dataRoot,
+      windowsHide: true,
+      env: createPortableProcessEnv(paths)
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    child.on('error', (error) => {
+      reject(new AppError('DEPENDENCY_COMMAND_SPAWN_FAILED', `依赖命令启动失败: ${error.message}`, {
+        nodePath,
+        npmCliPath,
+        args: npmArgs,
+        code: error.code
+      }));
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new AppError('DEPENDENCY_COMMAND_FAILED', stderr || stdout || `依赖命令失败，退出码 ${code}`, {
+        nodePath,
+        npmCliPath,
+        args: npmArgs,
+        exitCode: code,
+        stdout,
+        stderr
+      }));
     });
   });
 }

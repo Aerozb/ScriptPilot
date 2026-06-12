@@ -12,10 +12,11 @@ const DATA_README = `# ScriptPilot data 目录说明
 | 路径 | 用途 | 是否可清理 |
 | --- | --- | --- |
 | configs/ | 配置文件，例如 config.sh、extra.sh、notify.js、.npmrc。 | 不建议随意删除，会影响脚本配置。 |
-| scripts/ | 用户脚本、任务脚本和订阅拉取的脚本。 | 不建议删除，除非确认脚本不再需要。 |
+| scripts/ | 用户脚本、任务脚本和订阅拉取后可执行的脚本。 | 不建议删除，除非确认脚本不再需要。 |
 | scripts/tasks/ | 从定时任务弹窗里直接填写内容时自动保存的脚本。 | 不建议删除，对应任务会找不到脚本。 |
 | scripts/api/ | 通过本机 API 传入 scriptContent 时临时落盘的脚本。 | 可按需清理历史接口脚本。 |
-| scripts/subscriptions/ | 订阅管理从 GitHub/HTTP 拉取到本地的脚本。 | 可清理，之后重新运行订阅会再次拉取。 |
+| repo/ | 按青龙 ql repo 方式保存订阅仓库原始文件，目录名为 作者_仓库[_分支]。 | 可清理，之后重新运行订阅会再次拉取。 |
+| raw/ | 按青龙 ql raw 方式保存单文件订阅的原始文件。 | 可清理，之后重新运行订阅会再次下载。 |
 | logs/ | 运行日志和应用日志总目录。 | 可清理旧日志。 |
 | logs/tasks/ | 定时任务、手动运行、API 运行产生的 stdout/stderr 日志。 | 可清理旧日志，但日志管理里将无法查看。默认会定期清理超过 30 天的运行日志。 |
 | logs/app/ | Electron 应用日志。 | 可清理旧日志。 |
@@ -61,6 +62,8 @@ export function createPortablePaths(explicitRoot = undefined) {
     dataRoot,
     runtimeRoot: path.join(portableRoot, 'runtime'),
     scriptsRoot: path.join(dataRoot, 'scripts'),
+    repoRoot: path.join(dataRoot, 'repo'),
+    rawRoot: path.join(dataRoot, 'raw'),
     logsRoot: path.join(dataRoot, 'logs'),
     taskLogsRoot: path.join(dataRoot, 'logs', 'tasks'),
     cacheRoot: path.join(dataRoot, 'cache'),
@@ -80,6 +83,8 @@ export async function ensurePortableDirectories(paths) {
     paths.dataRoot,
     path.join(paths.dataRoot, 'configs'),
     paths.scriptsRoot,
+    paths.repoRoot,
+    paths.rawRoot,
     paths.logsRoot,
     paths.taskLogsRoot,
     paths.cacheRoot,
@@ -161,6 +166,9 @@ export function createPortableProcessEnv(paths, extraEnv = {}, baseEnv = process
     APPDATA: paths.appDataRoot,
     LOCALAPPDATA: paths.localAppDataRoot,
     XDG_CACHE_HOME: cacheXdgRoot,
+    QL_DIR: paths.portableRoot,
+    QL_DATA_DIR: paths.dataRoot,
+    QL_NODE_GLOBAL_PATH: path.join(paths.dataRoot, 'node_modules'),
     npm_config_cache: cacheNpmRoot,
     npm_config_prefix: paths.dataRoot,
     npm_config_userconfig: npmUserConfigPath,

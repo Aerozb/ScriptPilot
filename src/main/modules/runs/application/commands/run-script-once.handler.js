@@ -1,10 +1,12 @@
-import { mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdir, writeFile, access, appendFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
 import { commandOk } from '../../../../shared/application/command-result.js';
 import { AppError } from '../../../../shared/errors/app-error.js';
 import { resolvePortablePath, toPortablePath } from '../../../../bootstrap/portable-paths.js';
 import { createNodePathEnv } from '../../../dependencies/infrastructure/script-dependency-manager.js';
+import { loadEnabledScriptEnv } from '../../infrastructure/script-process-env.js';
+import { runNodeScriptWithDependencyRetry } from '../../infrastructure/script-runner-with-retry.js';
 import { Task } from '../../../tasks/domain/task.aggregate.js';
 import { Run } from '../../domain/run.aggregate.js';
 
@@ -20,20 +22,17 @@ export class RunScriptOnceHandler {
   async handle(command) {
     const input = normalizeInput(command.payload);
     const scriptPath = await this.resolveScriptPath(input);
+    const portableScriptPath = toPortablePath(this.paths, scriptPath);
     const cwd = input.cwd ? resolvePortablePath(this.paths, input.cwd, { label: '工作目录' }) : this.paths.dataRoot;
     const runtime = await this.resolveNodeRuntime(this.paths);
-    const dependencyCheck = await this.ensureScriptDependencies({
-      paths: this.paths,
-      runtime,
-      scriptPath,
-      scriptContent: input.scriptContent,
-      requestedDependencies: input.dependencies,
-      autoInstall: input.autoInstallDependencies,
-      forceCheck: input.forceDependencyCheck
-    });
+    const enabledEnv = await loadEnabledScriptEnv(this.paths);
+    let dependencyCheck = {
+      status: '等待依赖预检',
+      reason: '运行开始后自动检查脚本依赖'
+    };
     const tempTask = Task.create({
       name: input.name,
-      scriptPath: toPortablePath(this.paths, scriptPath),
+      scriptPath: portableScriptPath,
       cwd: input.cwd || 'data',
       args: input.args,
       params: input.params,
@@ -43,6 +42,8 @@ export class RunScriptOnceHandler {
 
     const run = Run.start({
       taskId: tempTask.id,
+      name: input.name,
+      scriptPath: portableScriptPath,
       trigger: 'api',
       runtime,
       dependencyCheck,
@@ -57,37 +58,87 @@ export class RunScriptOnceHandler {
 
     await this.runRepository.save(run);
 
-    try {
-      const result = await this.runNodeScript({
-        runId: run.id,
-        paths: this.paths,
-        nodePath: runtime.nodePath,
-        scriptPath,
-        args: input.args,
-        cwd,
-        env: {
-          SCRIPTPILOT_TRIGGER: 'api',
-          SCRIPTPILOT_TASK_ID: tempTask.id,
-          SCRIPTPILOT_RUN_ID: run.id,
-          SCRIPTPILOT_PARAMS: JSON.stringify(input.params || {}),
-          NODE_PATH: createNodePathEnv(this.paths),
-          ...sanitizeUserEnv(input.env || {})
-        },
-        stdoutPath,
-        stderrPath,
-        timeoutMs: input.timeoutMs,
-        onStarted: async ({ pid }) => {
-          run.pid = pid;
-          await this.runRepository.save(run);
-        }
-      });
+    const executeRun = async () => {
+      try {
+        await appendRunnerLog(stdoutPath, 'ScriptPilot 正在检查脚本依赖...');
+        dependencyCheck = await this.ensureScriptDependencies({
+          paths: this.paths,
+          runtime,
+          scriptPath,
+          scriptContent: input.scriptContent,
+          requestedDependencies: input.dependencies,
+          autoInstall: input.autoInstallDependencies,
+          forceCheck: input.forceDependencyCheck
+        });
+        await this.updateRun(run.id, (latestRun) => {
+          latestRun.dependencyCheck = dependencyCheck;
+        });
+        await appendRunnerLog(stdoutPath, formatDependencyCheckMessage(dependencyCheck));
 
-      run.markFinished(result);
-    } catch (error) {
-      run.markFailed(error);
+        const latestBeforeSpawn = await this.runRepository.findById(run.id);
+        if (latestBeforeSpawn?.status === 'stopped') return;
+
+        const runInput = {
+          runId: run.id,
+          paths: this.paths,
+          nodePath: runtime.nodePath,
+          scriptPath,
+          args: input.args,
+          cwd,
+          env: {
+            ...enabledEnv,
+            SCRIPTPILOT_TRIGGER: 'api',
+            SCRIPTPILOT_TASK_ID: tempTask.id,
+            SCRIPTPILOT_RUN_ID: run.id,
+            SCRIPTPILOT_PARAMS: JSON.stringify(input.params || {}),
+            NODE_PATH: createNodePathEnv(this.paths),
+            ...sanitizeUserEnv(input.env || {})
+          },
+          stdoutPath,
+          stderrPath,
+          appendLog: true,
+          timeoutMs: input.timeoutMs,
+          onStarted: async ({ pid }) => {
+            await this.updateRun(run.id, (latestRun) => {
+              if (latestRun.status !== 'stopped') latestRun.pid = pid;
+            });
+          }
+        };
+        const { result, dependencyCheck: finalDependencyCheck } = await runNodeScriptWithDependencyRetry({
+          runNodeScript: this.runNodeScript,
+          ensureScriptDependencies: this.ensureScriptDependencies,
+          paths: this.paths,
+          runtime,
+          scriptPath,
+          scriptContent: input.scriptContent,
+          requestedDependencies: input.dependencies,
+          autoInstall: input.autoInstallDependencies,
+          dependencyCheck,
+          runInput
+        });
+
+        dependencyCheck = finalDependencyCheck;
+        await this.updateRun(run.id, (latestRun) => {
+          if (latestRun.status === 'stopped') return;
+          latestRun.dependencyCheck = dependencyCheck;
+          latestRun.markFinished(result);
+        });
+      } catch (error) {
+        await appendRunnerLog(stderrPath, error.stack || error.message || String(error));
+        await this.updateRun(run.id, (latestRun) => {
+          if (latestRun.status !== 'stopped') latestRun.markFailed(error);
+        });
+      }
+    };
+
+    if (input.waitForCompletion === false) {
+      executeRun().catch((error) => {
+        console.error(`脚本后台运行失败: ${input.name}`, error);
+      });
+      return commandOk({ runId: run.id, started: true });
     }
 
-    await this.runRepository.save(run);
+    await executeRun();
     return commandOk({ runId: run.id });
   }
 
@@ -107,6 +158,13 @@ export class RunScriptOnceHandler {
       throw new AppError('SCRIPT_NOT_FOUND', `脚本文件不存在: ${input.scriptPath}`, { scriptPath });
     }
     return scriptPath;
+  }
+
+  async updateRun(runId, mutate) {
+    const latestRun = await this.runRepository.findById(runId);
+    if (!latestRun) return;
+    mutate(latestRun);
+    await this.runRepository.save(latestRun);
   }
 }
 
@@ -146,6 +204,7 @@ function normalizeInput(input) {
     dependencies: (input.dependencies || []).map(String),
     autoInstallDependencies: input.autoInstallDependencies !== false,
     forceDependencyCheck: input.forceDependencyCheck === true,
+    waitForCompletion: input.waitForCompletion !== false,
     timeoutMs: Number.isInteger(input.timeoutMs) ? input.timeoutMs : 30000
   };
 }
@@ -162,6 +221,9 @@ function sanitizeUserEnv(env) {
     'SCRIPTPILOT_RUN_ID',
     'SCRIPTPILOT_TRIGGER',
     'SCRIPTPILOT_PARAMS',
+    'QL_DIR',
+    'QL_DATA_DIR',
+    'QL_NODE_GLOBAL_PATH',
     'NODE_PATH',
     'TMP',
     'TEMP',
@@ -181,4 +243,14 @@ function sanitizeUserEnv(env) {
       .filter(([key]) => !protectedKeys.has(String(key)))
       .map(([key, value]) => [key, String(value)])
   );
+}
+
+async function appendRunnerLog(filePath, message) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await appendFile(filePath, `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${message}\n`, 'utf8');
+}
+
+function formatDependencyCheckMessage(dependencyCheck = {}) {
+  const installed = dependencyCheck.installed?.length ? `，安装：${dependencyCheck.installed.join(', ')}` : '';
+  return `依赖预检完成：${dependencyCheck.status || '完成'}${installed}`;
 }

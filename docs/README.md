@@ -1,19 +1,15 @@
 # ScriptPilot 维护说明
 
-ScriptPilot 是一个 Windows 绿色版 Electron 应用，用来本机执行和调度 NodeJS 脚本。当前目标是目录版 EXE，不做安装包，不做压缩包。
+ScriptPilot 是 Windows 绿色便携版 Electron 应用，用来本机执行和调度 NodeJS 脚本。当前目标是目录版 EXE，不做安装包。
 
-## 产物
+## 产物结构
 
 最终可运行目录：
 
 ```text
 release/win-unpacked/
   ScriptPilot.exe          外层启动器，用户只需要双击这个
-  app/                     实际程序文件、内置 Node、data 数据目录
-    ScriptPilot.exe
-    runtime/node/active/node.exe
-    runtime/node/active/npm.cmd
-    data/
+  app/                     实际程序文件、内置 Node、运行时资源
 ```
 
 直接运行：
@@ -22,25 +18,17 @@ release/win-unpacked/
 .\release\win-unpacked\ScriptPilot.exe
 ```
 
-目录整理目标：
-
-```text
-release/win-unpacked/ 根目录只保留 2 个项目
-  ScriptPilot.exe
-  app/
-```
-
 构建目录版：
 
 ```powershell
 npm run dist:dir
 ```
 
-`npm run dist` 当前也指向目录版构建。`dist:zip` 已禁用，后续不要生成 zip、7z、rar、tar、gz。
+`npm run dist` 当前也指向目录版构建。`dist:zip` 已禁用，日常构建不要生成 zip、7z、rar、tar、gz。需要 GitHub Release 附件时，在源码目录外对干净产物单独打包。
 
 ## 数据目录
 
-应用自身产生的数据必须在绿色版目录内，当前都位于 `app/data`：
+应用自身产生的数据必须在绿色版目录内：
 
 ```text
 release/win-unpacked/app/data/
@@ -49,13 +37,15 @@ release/win-unpacked/app/data/
 关键路径：
 
 ```text
-app/data/README.md           绿色数据目录说明，会在启动时自动生成/刷新
+app/data/README.md           绿色数据目录说明，启动时自动生成/刷新
 app/data/state/              任务、运行记录、设置、环境变量
 app/data/scripts/            用户脚本和订阅脚本
+app/data/configs/            配置文件
 app/data/logs/               运行日志和应用日志
-app/data/state/log-cleanup-state.json 最近一次日志清理结果
 app/data/cache/npm/          npm 缓存
 app/data/node_modules/       自动安装的脚本依赖
+app/data/repo/               Git 仓库订阅缓存
+app/data/raw/                Raw 单文件订阅缓存
 app/data/tmp/                临时目录
 app/data/profile/            APPDATA/LOCALAPPDATA 重定向
 app/data/home/               HOME/USERPROFILE 重定向
@@ -63,11 +53,7 @@ app/data/home/               HOME/USERPROFILE 重定向
 
 代码入口在 `src/main/bootstrap/portable-paths.js`。脚本路径、工作目录、日志路径会校验必须位于安装目录内。脚本子进程的 `TEMP/TMP/HOME/APPDATA/LOCALAPPDATA/npm_config_cache/NODE_PATH` 会重定向到 `data`。
 
-配置文件页提供“打开目录/打开所在目录”，对应 `app/data/configs`。脚本管理页提供“打开目录/打开所在目录”，对应 `app/data/scripts` 或当前脚本所在目录。打开目录由主进程统一校验，只允许打开安装目录内路径。
-
-日志清理默认启用，每 3 天检查一次，清理超过 30 天的运行日志；系统设置里修改后会自动保存并实时生效，无需点击保存。也可点击“立即清理”或调用 `POST /api/logs/cleanup` 手动执行。清理会删除过期运行记录和对应 `data/logs/tasks` 下的 stdout/stderr 文件，不会清理正在运行的日志。
-
-限制：如果用户脚本主动写入外部绝对路径，例如 `C:\xxx`，Windows 不会自动拦截。要阻止恶意脚本越界写入，需要另做低权限沙箱或 ACL 隔离，这和“最高权限运行”冲突。
+限制：如果用户脚本主动写入外部绝对路径，例如 `C:\xxx`，Windows 不会自动拦截。要阻止恶意脚本越界写入，需要低权限沙箱或 ACL 隔离，这和“最高权限运行”冲突。
 
 ## 默认外观
 
@@ -84,6 +70,31 @@ app/data/home/               HOME/USERPROFILE 重定向
 ```
 
 自动验收脚本不得修改外观设置。
+
+## 实时日志
+
+青龙面板的定时任务日志弹窗不是 WebSocket 推送，而是：
+
+1. 后端运行脚本时持续追加日志文件。
+2. 前端弹窗周期性请求日志接口。
+3. 前端判断日志未结束就继续请求并自动滚动到底部。
+
+ScriptPilot 按同一思路实现：
+
+1. `waitForCompletion: false` 时，主进程创建运行记录后立即返回 `runId`。
+2. 后台继续执行依赖预检、脚本运行、缺依赖自愈重试和最终状态落库。
+3. 渲染层拿到 `runId` 后马上进入日志页。
+4. 当前运行状态为 `running` 时，每 1 秒调用 `getRun` + `getRunLog` 刷新。
+5. 日志列表按脚本分组，组内按 `startedAt` 倒序。
+
+相关文件：
+
+```text
+src/main/modules/runs/application/commands/run-task-now.handler.js
+src/main/modules/runs/application/commands/run-script-once.handler.js
+src/main/shared/infrastructure/process/process-runner.js
+src/electron/renderer/renderer.js
+```
 
 ## 架构
 
@@ -143,24 +154,47 @@ POST /api/startup/enable
 POST /api/startup/disable
 ```
 
-运行脚本示例：
+`POST /api/scripts/run` 默认等待脚本执行完成并返回 `{ run, log }`。如果传入：
 
-```powershell
-$body = @{
-  name = '接口运行'
-  scriptContent = 'console.log(process.argv.slice(2)); console.log(process.env.SCRIPTPILOT_PARAMS)'
-  args = @('参数1')
-  params = @{ 来源 = 'API' }
-  cwd = 'data'
-  timeoutMs = 30000
-} | ConvertTo-Json -Depth 8
-
-Invoke-RestMethod `
-  -Uri 'http://127.0.0.1:18760/api/scripts/run' `
-  -Method Post `
-  -ContentType 'application/json; charset=utf-8' `
-  -Body $body
+```json
+{ "waitForCompletion": false }
 ```
+
+则立即返回 `{ "runId": "...", "started": true }`，调用方可继续轮询 `GET /api/runs/{id}` 和 `GET /api/runs/{id}/log`。
+
+## 订阅
+
+订阅支持：
+
+```text
+https://github.com/shufflewzc/faker2.git
+shufflewzc/faker2.git
+git@github.com:shufflewzc/faker2.git
+ql repo https://github.com/shufflewzc/faker2.git "USER_AGENTS|function/common" "" "" ""
+ql raw https://raw.githubusercontent.com/owner/repo/main/demo.js
+```
+
+订阅脚本目录优先使用“订阅名称”。例如订阅名称填 `faker3`、地址填 `https://github.com/shufflewzc/faker3.git`，拉取后脚本目录就是 `data/scripts/faker3`，仓库缓存目录是 `data/repo/faker3`。
+
+## 依赖
+
+依赖处理逻辑：
+
+1. 脚本或相对 helper 文件内容变化后才做预检。
+2. 预检扫描 `require/import`，自动安装缺失包到 `data/node_modules`。
+3. 运行时报 `Cannot find module` 时自动安装并重试，最多 5 轮。
+4. npm 缓存、prefix、临时目录都在 `app/data` 下。
+
+## 日志清理
+
+日志清理默认启用：
+
+```text
+检查周期：3 天
+保留天数：30 天
+```
+
+系统设置里修改后自动保存并实时生效，无需点击保存。也可点击“立即清理”或调用 `POST /api/logs/cleanup`。清理会删除过期运行记录和对应 `data/logs/tasks` 下的 stdout/stderr 文件，不会清理正在运行的日志。
 
 ## 验收
 
@@ -170,13 +204,13 @@ Invoke-RestMethod `
 node tools\human-acceptance.mjs
 ```
 
-验收覆盖：
+重点覆盖：
 
 - 中文 UI。
 - 首屏进入定时任务。
-- 脚本保存、运行、查看日志。
+- 脚本保存、运行、实时日志。
 - 任务创建、批量运行、更多菜单、详情、视图、删除。
-- 本机 HTTP 订阅拉取并真实执行。完整验收默认不依赖 GitHub，避免外网波动导致误报。
+- 本机 HTTP 订阅拉取并执行。
 - 本机 API 携带 args/params 运行脚本。
 - 环境变量 API。
 - 缺失依赖自动安装，脚本未变更时跳过预检。
@@ -184,40 +218,14 @@ node tools\human-acceptance.mjs
 - 绿色路径环境变量。
 - 外部绝对脚本路径和工作目录拒绝。
 
-GitHub 订阅功能已用真实网络单独复测通过：
-
-```text
-source: https://github.com/nodejs/examples/tree/main/cli/yargs/countEntriesInDirectory
-pulledFileCount: 6
-scriptPath: data/scripts/subscriptions/.../bin/cli.js
-dependencySpecs.yargs: ^15.3.1
-output: 4
-```
-
-订阅地址支持：
-
-```text
-https://github.com/shufflewzc/faker2.git
-shufflewzc/faker2.git
-git@github.com:shufflewzc/faker2.git
-ql repo https://github.com/shufflewzc/faker2.git "USER_AGENTS|function/common" "" "" ""
-```
-
-EXE smoke：
-
-```powershell
-$env:SCRIPTPILOT_SMOKE_RUN_DEMO='1'
-.\release\win-unpacked\app\ScriptPilot.exe --smoke-run-demo
-```
-
 ## 保留目录说明
 
 ```text
 src/            源码
 runtime/        构建时打包进 release 的内置 Node
 tools/          构建后修正 runtime、完整验收
-release/win-unpacked/ 当前目录版便携产物，主目录只保留启动器和 app 目录
-node_modules/   开发依赖，构建和验收需要
+node_modules/   开发依赖，本地构建和验收需要，不提交
+release/        构建输出，不提交源码仓库
 ```
 
-`vendor/qinglong`、`ui-mockups`、根目录 `data`、测试生成的外部路径文件都不是当前运行或构建必需内容，已清理。
+`vendor/qinglong`、`ui-mockups`、根目录 `data`、测试生成的外部路径文件都不是当前运行或构建必需内容，应清理。

@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('scriptPilot', {
   setTaskPinned: (taskId, pinned) => invoke('task:set-pinned', { taskId, pinned }),
   updateTaskLabels: (input) => invoke('task:update-labels', input),
   deleteTask: (taskId) => invoke('task:delete', { taskId }),
-  runTaskNow: (taskId) => invoke('task:run-now', { taskId }),
+  runTaskNow: (taskId, options = {}) => invoke('task:run-now', { taskId, ...options }),
   stopTaskRun: (taskId) => invoke('task:stop-run', { taskId }),
   runScriptOnce: (input) => invoke('script:run-once', input),
   listRuns: (input) => invoke('run:list', input),

@@ -338,6 +338,9 @@ async function routeQinglongRequest(coreApp, request, url) {
 
 async function runScriptAndReadResult(coreApp, input) {
   const commandResult = await coreApp.commandBus.execute(runScriptOnceCommand(input));
+  if (input?.waitForCompletion === false) {
+    return commandResult.data;
+  }
   const run = await coreApp.queryBus.execute(getRunQuery({ runId: commandResult.data.runId }));
   const log = await coreApp.queryBus.execute(getRunLogQuery({ runId: run.id, stream: 'combined' }));
   return { run, log };

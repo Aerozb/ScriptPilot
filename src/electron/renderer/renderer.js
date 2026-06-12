@@ -22,10 +22,15 @@ const state = {
   subscriptions: [],
   dependencies: [],
   dependencyHistory: [],
+  installingDependency: false,
   selectedTaskIds: new Set(),
   selectedEnvIds: new Set(),
   selectedSubscriptionIds: new Set(),
   selectedScriptPaths: new Set(),
+  launchingTaskIds: new Set(),
+  launchingScriptPaths: new Set(),
+  runningSubscriptionIds: new Set(),
+  expandedScriptDirs: new Set(['data/scripts']),
   settings: undefined,
   taskPage: 1,
   taskPageSize: 20,
@@ -42,10 +47,13 @@ const els = {};
 let pendingConfirmResolver;
 let logCleanupSaveTimer;
 let logCleanupSaveSeq = 0;
+let scriptSplitResize;
+let logRefreshTimer;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindElements();
   bindEvents();
+  initScriptSplitResize();
   init().catch(showFatalError);
 });
 
@@ -180,6 +188,50 @@ function bindEvents() {
   });
 }
 
+function initScriptSplitResize() {
+  if (!els.scriptSplit || !els.scriptSplitResizer) return;
+  const savedWidth = Number(localStorage.getItem('scriptPilot.scriptListWidth'));
+  if (Number.isFinite(savedWidth) && savedWidth >= 220) {
+    setScriptListWidth(savedWidth);
+  }
+
+  els.scriptSplitResizer.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    const rect = els.scriptSplit.getBoundingClientRect();
+    scriptSplitResize = {
+      pointerId: event.pointerId,
+      left: rect.left,
+      width: rect.width
+    };
+    els.scriptSplitResizer.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-script-list');
+  });
+
+  els.scriptSplitResizer.addEventListener('pointermove', (event) => {
+    if (!scriptSplitResize || scriptSplitResize.pointerId !== event.pointerId) return;
+    const nextWidth = clamp(event.clientX - scriptSplitResize.left, 220, Math.min(620, scriptSplitResize.width - 360));
+    setScriptListWidth(nextWidth);
+  });
+
+  const finishResize = (event) => {
+    if (!scriptSplitResize || scriptSplitResize.pointerId !== event.pointerId) return;
+    const width = Number.parseInt(getComputedStyle(els.scriptSplit).getPropertyValue('--script-list-width'), 10);
+    if (Number.isFinite(width)) localStorage.setItem('scriptPilot.scriptListWidth', String(width));
+    scriptSplitResize = undefined;
+    document.body.classList.remove('resizing-script-list');
+  };
+  els.scriptSplitResizer.addEventListener('pointerup', finishResize);
+  els.scriptSplitResizer.addEventListener('pointercancel', finishResize);
+}
+
+function setScriptListWidth(width) {
+  els.scriptSplit.style.setProperty('--script-list-width', `${Math.round(width)}px`);
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
 async function init() {
   state.info = await api.getInfo();
   els.portableRoot.textContent = state.info.portableRoot;
@@ -188,9 +240,11 @@ async function init() {
   els.apiUrl.textContent = state.info.apiUrl || '未启动';
   els.sideApiUrl.textContent = state.info.apiUrl || '未启动';
   await loadAppearanceSettings();
-  await refreshAll();
-  await refreshStartupStatus();
-  await showPage('crontab');
+  await showPage(state.activePage || 'crontab');
+  await Promise.all([
+    refreshAll(),
+    refreshStartupStatus()
+  ]);
 }
 
 async function refreshAll() {
@@ -370,6 +424,8 @@ function renderTaskRow(task) {
   const selected = state.selectedTaskIds.has(task.id);
   const rowClass = [selected ? 'selected' : '', task.pinned ? 'pinned-row' : ''].filter(Boolean).join(' ');
   const status = task.statusInfo;
+  const isLaunching = state.launchingTaskIds.has(task.id);
+  const isBusy = isLaunching || status.value === 'running';
   return `
     <tr class="${rowClass}" data-task-row="${escapeAttr(task.id)}">
       <td class="check-col"><input type="checkbox" data-task-check="${escapeAttr(task.id)}" ${selected ? 'checked' : ''}></td>
@@ -385,7 +441,7 @@ function renderTaskRow(task) {
       <td>${renderLabels(task.labels)}</td>
       <td>
         <div class="row-actions">
-          ${status.value === 'running' ? `<button class="link-button red" data-stop-task="${escapeAttr(task.id)}">停止</button>` : `<button class="link-button" data-run-task="${escapeAttr(task.id)}">运行</button>`}
+          ${isBusy ? `<button class="link-button red" data-stop-task="${escapeAttr(task.id)}">${isLaunching ? '启动中' : '停止'}</button>` : `<button class="link-button" data-run-task="${escapeAttr(task.id)}">运行</button>`}
           <button class="link-button" data-log-task="${escapeAttr(task.id)}" ${task.latestRun ? '' : 'disabled'}>日志</button>
           <button class="link-button menu-trigger" data-more-task="${escapeAttr(task.id)}">更多</button>
         </div>
@@ -692,16 +748,21 @@ function syncScheduleTypeFields() {
 async function runTask(taskId) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
+  if (state.launchingTaskIds.has(taskId) || latestRunForTask(taskId)?.status === 'running') {
+    toast('该任务正在运行，请在日志页查看实时输出');
+    return;
+  }
   if (!await confirmAction({
     title: '运行定时任务',
     message: `确认立即运行「${task.name}」吗？`,
     okText: '立即运行'
   })) return;
-  toast(`正在运行: ${task?.name || taskId}`);
+  state.launchingTaskIds.add(taskId);
+  renderTasks();
+  toast(`已启动运行: ${task?.name || taskId}`);
   try {
-    const result = await api.runTaskNow(taskId);
+    const result = await api.runTaskNow(taskId, { waitForCompletion: false });
     const runId = result.runId || result.data?.runId;
-    const run = await api.getRun(runId);
     await refreshTasksAndRuns();
     renderMetrics();
     renderTasks();
@@ -709,11 +770,14 @@ async function runTask(taskId) {
     if (state.detailTaskId === taskId && els.taskDetailModal.open) {
       await refreshTaskDetail(taskId);
     }
-    await showRunLog(run.id);
     await showPage('log');
-    toast(`运行完成: ${formatStatus(run.status)}`);
+    await showRunLog(runId);
+    toast('任务已开始运行，日志正在实时刷新');
   } catch (error) {
     toast(formatError(error));
+  } finally {
+    state.launchingTaskIds.delete(taskId);
+    renderTasks();
   }
 }
 
@@ -748,13 +812,30 @@ async function batchRunTasks() {
     message: `确认立即运行选中的 ${ids.length} 个定时任务吗？`,
     okText: '批量运行'
   })) return;
-  toast(`正在运行 ${ids.length} 个任务`);
-  for (const id of ids) await api.runTaskNow(id);
-  await refreshTasksAndRuns();
-  renderMetrics();
-  renderTasks();
-  renderRuns();
-  toast(`已运行 ${ids.length} 个任务`);
+  try {
+    ids.forEach((id) => state.launchingTaskIds.add(id));
+    renderTasks();
+    toast(`正在启动 ${ids.length} 个任务`);
+    let lastRunId;
+    for (const id of ids) {
+      const result = await api.runTaskNow(id, { waitForCompletion: false });
+      lastRunId = result.runId || result.data?.runId || lastRunId;
+    }
+    await refreshTasksAndRuns();
+    renderMetrics();
+    renderTasks();
+    renderRuns();
+    if (lastRunId) {
+      await showPage('log');
+      await showRunLog(lastRunId);
+    }
+    toast(`已启动 ${ids.length} 个任务，日志正在实时刷新`);
+  } catch (error) {
+    toast(formatError(error));
+  } finally {
+    ids.forEach((id) => state.launchingTaskIds.delete(id));
+    renderTasks();
+  }
 }
 
 async function batchStopTasks() {
@@ -1196,7 +1277,7 @@ function describeViewFilters(view) {
 async function handleRunSubmit(event) {
   event.preventDefault();
   try {
-    toast('脚本正在运行');
+    toast('脚本已开始启动');
     const result = await api.runScriptOnce({
       name: readValue('runNameInput') || '手动运行脚本',
       scriptPath: readValue('runScriptPathInput') || undefined,
@@ -1206,15 +1287,16 @@ async function handleRunSubmit(event) {
       cwd: readValue('runCwdInput') || 'data',
       dependencies: readLines('runDependenciesInput'),
       autoInstallDependencies: els.runAutoInstallInput.checked,
+      waitForCompletion: false,
       timeoutMs: readInteger('runTimeoutInput', 30000)
     });
     els.runModal.close();
     await refreshTasksAndRuns();
     renderMetrics();
     renderRuns();
-    await showRunLog(result.run.id);
     await showPage('log');
-    toast(`运行完成: ${formatStatus(result.run.status)}`);
+    await showRunLog(result.runId || result.data?.runId);
+    toast('脚本已开始运行，日志正在实时刷新');
   } catch (error) {
     toast(formatError(error));
   }
@@ -1422,7 +1504,7 @@ function renderSubscriptions() {
             <td>${item.status === 'enabled' ? '<span class="tag green">启用</span>' : '<span class="tag red">禁用</span>'}</td>
             <td>${item.lastPulledAt ? escapeHtml(formatDateTime(item.lastPulledAt)) : '-'}</td>
             <td class="path-col" title="${escapeAttr(item.lastResult || '-')}">${escapeHtml(item.lastResult || '-')}</td>
-            <td><div class="row-actions"><button class="link-button" data-run-subscription="${escapeAttr(item.id)}">运行</button><button class="link-button" data-edit-subscription="${escapeAttr(item.id)}">编辑</button><button class="link-button red" data-delete-subscription="${escapeAttr(item.id)}">删除</button></div></td>
+            <td><div class="row-actions"><button class="link-button" data-run-subscription="${escapeAttr(item.id)}" ${state.runningSubscriptionIds.has(item.id) ? 'disabled' : ''}>${state.runningSubscriptionIds.has(item.id) ? '运行中...' : '运行'}</button><button class="link-button" data-edit-subscription="${escapeAttr(item.id)}">编辑</button><button class="link-button red" data-delete-subscription="${escapeAttr(item.id)}">删除</button></div></td>
           </tr>
         `).join('')}
       </tbody>
@@ -1445,9 +1527,9 @@ function renderSubscriptions() {
     toggleSet(state.selectedSubscriptionIds, row.dataset.subscriptionRow, !state.selectedSubscriptionIds.has(row.dataset.subscriptionRow));
     renderSubscriptions();
   }));
-  document.querySelectorAll('[data-run-subscription]').forEach((button) => button.addEventListener('click', (event) => {
+  document.querySelectorAll('[data-run-subscription]').forEach((button) => button.addEventListener('click', async (event) => {
     event.stopPropagation();
-    runSubscription(button.dataset.runSubscription);
+    await runSubscription(button.dataset.runSubscription);
   }));
   document.querySelectorAll('[data-edit-subscription]').forEach((button) => button.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -1483,6 +1565,11 @@ async function refreshSubscriptions() {
   renderSubscriptions();
 }
 
+async function refreshQinglongOverview() {
+  state.overview = await api.qlOverview();
+  renderMetrics();
+}
+
 function openSubscriptionModal(subscription) {
   els.subscriptionForm.reset();
   els.subscriptionModalTitle.textContent = subscription ? '编辑订阅' : '新建订阅';
@@ -1498,7 +1585,7 @@ function openSubscriptionModal(subscription) {
 async function handleSubscriptionSubmit(event) {
   event.preventDefault();
   try {
-    await api.saveSubscription({
+    const saved = await api.saveSubscription({
       id: els.subscriptionIdInput.value || undefined,
       name: readValue('subscriptionNameInput'),
       url: readValue('subscriptionUrlInput'),
@@ -1506,10 +1593,9 @@ async function handleSubscriptionSubmit(event) {
       schedule: readValue('subscriptionScheduleInput'),
       status: els.subscriptionStatusInput.value
     });
+    upsertSubscription(saved);
     els.subscriptionModal.close();
-    await refreshQinglongData();
-    renderMetrics();
-    renderSubscriptions();
+    await refreshQinglongOverview();
     toast('订阅已保存');
   } catch (error) {
     toast(formatError(error));
@@ -1517,28 +1603,77 @@ async function handleSubscriptionSubmit(event) {
 }
 
 async function runSubscription(id) {
+  const name = getSubscriptionName(id);
+  setSubscriptionRunStatus(`正在运行订阅：${name}`, 'info');
+  state.runningSubscriptionIds.add(id);
+  renderSubscriptions();
+  toast(`正在运行订阅：${name}`, { tone: 'info', persist: true });
   try {
     const result = await api.runSubscription(id);
-    await refreshQinglongData();
-    renderSubscriptions();
-    renderScripts();
-    renderMetrics();
-    toast(result.lastResult || '订阅已运行');
+    upsertSubscription(result);
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshScripts(),
+      refreshQinglongOverview()
+    ]);
+    const message = formatSubscriptionRunSuccess(result, name);
+    setSubscriptionRunStatus(message, 'success');
+    toast(message, { tone: 'success', durationMs: 7000 });
   } catch (error) {
-    toast(formatError(error));
+    const message = `订阅运行失败：${formatError(error)}`;
+    setSubscriptionRunStatus(message, 'error');
+    toast(message, { tone: 'error', durationMs: 8000 });
+  } finally {
+    state.runningSubscriptionIds.delete(id);
+    renderSubscriptions();
   }
 }
 
 async function batchRunSubscriptions() {
   const ids = [...state.selectedSubscriptionIds];
-  for (const id of ids) {
-    await api.runSubscription(id);
-  }
-  await refreshQinglongData();
+  if (!ids.length) return;
+  setSubscriptionRunStatus(`正在运行 ${ids.length} 个订阅...`, 'info');
+  ids.forEach((id) => state.runningSubscriptionIds.add(id));
   renderSubscriptions();
-  renderScripts();
-  renderMetrics();
-  toast(`已运行 ${ids.length} 个订阅`);
+  toast(`正在运行 ${ids.length} 个订阅...`, { tone: 'info', persist: true });
+  const results = [];
+  try {
+    for (const id of ids) {
+      const result = await api.runSubscription(id);
+      results.push(result);
+      upsertSubscription(result);
+    }
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshScripts(),
+      refreshQinglongOverview()
+    ]);
+    const summaries = results
+      .map((item) => item?.lastResult)
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('；');
+    const names = results
+      .map((item) => item?.name)
+      .filter(Boolean)
+      .slice(0, 3)
+      .join('、');
+    const message = `订阅运行成功：${names || `已完成 ${results.length} 个订阅`}${summaries ? `，${summaries}` : ''}`;
+    setSubscriptionRunStatus(message, 'success');
+    toast(message, { tone: 'success', durationMs: 8000 });
+  } catch (error) {
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshScripts(),
+      refreshQinglongOverview()
+    ]);
+    const message = `订阅运行失败：${formatError(error)}`;
+    setSubscriptionRunStatus(message, 'error');
+    toast(message, { tone: 'error', durationMs: 8000 });
+  } finally {
+    ids.forEach((id) => state.runningSubscriptionIds.delete(id));
+    renderSubscriptions();
+  }
 }
 
 async function batchDeleteSubscriptions() {
@@ -1552,9 +1687,11 @@ async function batchDeleteSubscriptions() {
   })) return;
   await api.deleteSubscriptions(ids);
   state.selectedSubscriptionIds.clear();
-  await refreshQinglongData();
-  renderMetrics();
-  renderSubscriptions();
+  await Promise.all([
+    refreshSubscriptions(),
+    refreshScripts(),
+    refreshQinglongOverview()
+  ]);
   toast(`已删除 ${ids.length} 个订阅`);
 }
 
@@ -1623,19 +1760,38 @@ function renderScripts() {
   updateScriptButtons();
   if (!state.scripts.length) {
     els.scriptList.innerHTML = '<div class="empty">暂无脚本文件</div>';
+    if (els.selectAllScriptsInput) {
+      els.selectAllScriptsInput.checked = false;
+      els.selectAllScriptsInput.indeterminate = false;
+    }
     return;
   }
   const allSelected = state.scripts.length > 0 && state.scripts.every((item) => state.selectedScriptPaths.has(item.path));
-  els.scriptList.innerHTML = state.scripts.map((item) => `
-    <div class="file-item script-file-item ${state.currentScriptPath === item.path ? 'active' : ''} ${state.selectedScriptPaths.has(item.path) ? 'selected' : ''}" data-script-path="${escapeAttr(item.path)}">
-      <input type="checkbox" data-script-check="${escapeAttr(item.path)}" ${state.selectedScriptPaths.has(item.path) ? 'checked' : ''}>
-      <span class="script-file-meta">
-        <strong>${escapeHtml(item.name)}</strong>
-        <small>${escapeHtml(item.path)} · ${escapeHtml(formatBytes(item.size))}</small>
-      </span>
-    </div>
-  `).join('');
+  const tree = buildScriptTree(state.scripts);
+  expandScriptParents(state.currentScriptPath);
+  syncVisibleScriptDirectories(tree);
+  els.scriptList.innerHTML = `<div class="script-tree">${renderScriptTreeChildren(tree, 0)}</div>`;
   els.selectAllScriptsInput.checked = allSelected;
+  document.querySelectorAll('[data-script-dir-toggle]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleScriptDirectory(button.dataset.scriptDirToggle);
+    });
+  });
+  document.querySelectorAll('[data-script-dir-row]').forEach((row) => {
+    row.addEventListener('click', (event) => {
+      if (event.target.closest('input,button')) return;
+      toggleScriptDirectory(row.dataset.scriptDirRow);
+    });
+  });
+  document.querySelectorAll('[data-script-dir-check]').forEach((checkbox) => {
+    checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
+    checkbox.addEventListener('click', (event) => event.stopPropagation());
+    checkbox.addEventListener('change', () => {
+      toggleScriptDirectorySelection(checkbox.dataset.scriptDirCheck, checkbox.checked);
+      renderScripts();
+    });
+  });
   document.querySelectorAll('[data-script-path]').forEach((button) => {
     button.addEventListener('click', (event) => {
       if (event.target.closest('input')) return;
@@ -1651,17 +1807,155 @@ function renderScripts() {
   });
 }
 
+function buildScriptTree(scripts) {
+  const root = createScriptTreeNode('data/scripts', 'data/scripts');
+  const sorted = [...scripts].toSorted((a, b) => a.path.localeCompare(b.path));
+  for (const item of sorted) {
+    const relativePath = item.path.replace(/^data\/scripts\/?/, '');
+    if (!relativePath) continue;
+    const parts = relativePath.split('/').filter(Boolean);
+    const fileName = parts.pop();
+    let current = root;
+    let currentPath = 'data/scripts';
+    for (const dirName of parts) {
+      currentPath = `${currentPath}/${dirName}`;
+      if (!current.dirs.has(dirName)) {
+        current.dirs.set(dirName, createScriptTreeNode(dirName, currentPath));
+      }
+      current = current.dirs.get(dirName);
+    }
+    current.files.push({ ...item, name: fileName || item.name });
+  }
+  return root;
+}
+
+function createScriptTreeNode(name, nodePath) {
+  return {
+    name,
+    path: nodePath,
+    dirs: new Map(),
+    files: []
+  };
+}
+
+function renderScriptTreeChildren(node, depth) {
+  const dirs = [...node.dirs.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  const files = [...node.files].toSorted((a, b) => a.name.localeCompare(b.name));
+  return [
+    ...dirs.map((dir) => renderScriptDirectory(dir, depth)),
+    ...files.map((file) => renderScriptFile(file, depth))
+  ].join('');
+}
+
+function syncVisibleScriptDirectories(tree) {
+  const dirs = collectScriptDirPaths(tree);
+  const nextDirSet = new Set(['data/scripts', ...dirs]);
+  for (const dirPath of [...state.expandedScriptDirs]) {
+    if (!nextDirSet.has(dirPath)) state.expandedScriptDirs.delete(dirPath);
+  }
+}
+
+function collectScriptDirPaths(node) {
+  return [...node.dirs.values()].flatMap((dir) => [
+    dir.path,
+    ...collectScriptDirPaths(dir)
+  ]);
+}
+
+function renderScriptDirectory(node, depth) {
+  const expanded = state.expandedScriptDirs.has(node.path);
+  const paths = collectScriptPaths(node);
+  const selectedCount = paths.filter((scriptPath) => state.selectedScriptPaths.has(scriptPath)).length;
+  const checked = paths.length > 0 && selectedCount === paths.length;
+  const indeterminate = selectedCount > 0 && !checked;
+  return `
+    <div class="script-tree-node">
+      <div class="script-tree-row script-tree-dir" style="--depth:${depth}" data-script-dir-row="${escapeAttr(node.path)}">
+      <button class="script-tree-toggle" type="button" data-script-dir-toggle="${escapeAttr(node.path)}">${expanded ? '▾' : '▸'}</button>
+      <input type="checkbox" data-script-dir-check="${escapeAttr(node.path)}" data-indeterminate="${indeterminate}" ${checked ? 'checked' : ''}>
+      <span class="script-tree-name">
+        <strong>${escapeHtml(node.name)}</strong>
+        <small>${paths.length} 个脚本</small>
+      </span>
+      </div>
+      ${expanded ? `<div class="script-tree-children">${renderScriptTreeChildren(node, depth + 1)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderScriptFile(item, depth) {
+  return `
+    <div class="file-item script-file-item ${state.currentScriptPath === item.path ? 'active' : ''} ${state.selectedScriptPaths.has(item.path) ? 'selected' : ''}" style="--depth:${depth}" data-script-path="${escapeAttr(item.path)}">
+      <input type="checkbox" data-script-check="${escapeAttr(item.path)}" ${state.selectedScriptPaths.has(item.path) ? 'checked' : ''}>
+      <span class="script-file-meta">
+        <strong title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</strong>
+      </span>
+      <span class="script-file-size">${escapeHtml(formatBytes(item.size))}</span>
+    </div>
+  `;
+}
+
+function collectVisibleScriptPaths(node) {
+  return [
+    ...node.files.map((item) => item.path),
+    ...[...node.dirs.values()].flatMap((child) => collectVisibleScriptPaths(child))
+  ];
+}
+
+function collectVisibleRootScriptPaths() {
+  const tree = buildScriptTree(state.scripts);
+  return collectVisibleScriptPaths(tree);
+}
+
+function updateSelectAllScriptsState() {
+  if (!els.selectAllScriptsInput) return;
+  const visiblePaths = collectVisibleRootScriptPaths();
+  const selectedVisibleCount = visiblePaths.filter((item) => state.selectedScriptPaths.has(item)).length;
+  els.selectAllScriptsInput.checked = visiblePaths.length > 0 && selectedVisibleCount === visiblePaths.length;
+  els.selectAllScriptsInput.indeterminate = selectedVisibleCount > 0 && selectedVisibleCount < visiblePaths.length;
+}
+
+function collectScriptPaths(node) {
+  return [
+    ...node.files.map((item) => item.path),
+    ...[...node.dirs.values()].flatMap((child) => collectScriptPaths(child))
+  ];
+}
+
+function toggleScriptDirectory(dirPath) {
+  if (state.expandedScriptDirs.has(dirPath)) state.expandedScriptDirs.delete(dirPath);
+  else state.expandedScriptDirs.add(dirPath);
+  renderScripts();
+}
+
+function toggleScriptDirectorySelection(dirPath, checked) {
+  const paths = state.scripts
+    .map((item) => item.path)
+    .filter((scriptPath) => scriptPath.startsWith(`${dirPath}/`));
+  for (const scriptPath of paths) {
+    toggleSet(state.selectedScriptPaths, scriptPath, checked);
+  }
+}
+
+function expandScriptParents(scriptPath) {
+  const normalized = String(scriptPath || '').replaceAll('\\', '/');
+  if (!normalized.startsWith('data/scripts/')) return;
+  const parts = normalized.split('/').slice(0, -1);
+  let current = '';
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    if (current.startsWith('data/scripts')) state.expandedScriptDirs.add(current);
+  }
+}
+
 function updateScriptButtons() {
   const count = state.selectedScriptPaths.size;
   els.scriptBatchBar.hidden = state.scripts.length === 0;
-  els.scriptSelectionText.textContent = `已选择 ${count} 项`;
+  els.scriptSelectionText.textContent = `${count} 项`;
   els.batchRunScriptsButton.disabled = count === 0;
   els.batchDeleteScriptsButton.disabled = count === 0;
   els.clearScriptSelectionButton.disabled = count === 0;
-  if (els.selectAllScriptsInput) {
-    els.selectAllScriptsInput.checked = state.scripts.length > 0 && state.scripts.every((item) => state.selectedScriptPaths.has(item.path));
-    els.selectAllScriptsInput.indeterminate = count > 0 && !els.selectAllScriptsInput.checked;
-  }
+  updateSelectAllScriptsState();
 }
 
 function toggleAllScripts(checked) {
@@ -1681,6 +1975,7 @@ function newScript() {
   state.currentScriptPath = fileName;
   els.scriptPathInput.value = fileName;
   els.scriptEditor.value = 'console.log("hello ScriptPilot");\n';
+  expandScriptParents(fileName);
   renderScripts();
 }
 
@@ -1690,6 +1985,7 @@ async function loadScript(scriptPath) {
     state.currentScriptPath = script.path;
     els.scriptPathInput.value = script.path;
     els.scriptEditor.value = script.content;
+    expandScriptParents(script.path);
     renderScripts();
   } catch (error) {
     toast(formatError(error));
@@ -1740,21 +2036,33 @@ async function runCurrentScript() {
     toast('请输入脚本路径');
     return;
   }
+  if (state.launchingScriptPaths.has(scriptPath)) {
+    toast('该脚本正在启动，请在日志页查看实时输出');
+    return;
+  }
   try {
+    state.launchingScriptPaths.add(scriptPath);
+    els.runScriptFileButton.disabled = true;
+    els.runScriptFileButton.textContent = '启动中';
     await saveCurrentScript();
     const result = await api.runScriptOnce({
       name: scriptPath.split('/').pop() || '脚本文件运行',
       scriptPath,
       cwd: 'data',
+      waitForCompletion: false,
       timeoutMs: 30000
     });
     await refreshTasksAndRuns();
     renderRuns();
-    await showRunLog(result.run.id);
     await showPage('log');
-    toast(`脚本运行完成: ${formatStatus(result.run.status)}`);
+    await showRunLog(result.runId || result.data?.runId);
+    toast('脚本已开始运行，日志正在实时刷新');
   } catch (error) {
     toast(formatError(error));
+  } finally {
+    state.launchingScriptPaths.delete(scriptPath);
+    els.runScriptFileButton.disabled = false;
+    els.runScriptFileButton.textContent = '运行';
   }
 }
 
@@ -1794,25 +2102,30 @@ async function batchRunScripts() {
     okText: '批量运行'
   })) return;
   try {
-    toast(`正在运行 ${paths.length} 个脚本`);
-    let lastRun;
+    paths.forEach((scriptPath) => state.launchingScriptPaths.add(scriptPath));
+    toast(`正在启动 ${paths.length} 个脚本`);
+    let lastRunId;
     for (const scriptPath of paths) {
-      lastRun = await api.runScriptOnce({
+      const result = await api.runScriptOnce({
         name: scriptPath.split('/').pop() || '脚本批量运行',
         scriptPath,
         cwd: 'data',
+        waitForCompletion: false,
         timeoutMs: 30000
       });
+      lastRunId = result.runId || result.data?.runId || lastRunId;
     }
     await refreshTasksAndRuns();
     renderRuns();
-    if (lastRun?.run?.id) {
-      await showRunLog(lastRun.run.id);
+    if (lastRunId) {
       await showPage('log');
+      await showRunLog(lastRunId);
     }
-    toast(`已运行 ${paths.length} 个脚本`);
+    toast(`已启动 ${paths.length} 个脚本，日志正在实时刷新`);
   } catch (error) {
     toast(formatError(error));
+  } finally {
+    paths.forEach((scriptPath) => state.launchingScriptPaths.delete(scriptPath));
   }
 }
 
@@ -1887,16 +2200,24 @@ async function installDependency() {
     toast('请输入依赖名称');
     return;
   }
+  if (state.installingDependency) return;
   try {
-    toast(`正在安装依赖: ${name}`);
+    state.installingDependency = true;
+    els.installDependencyButton.disabled = true;
+    els.installDependencyButton.textContent = '安装中...';
+    toast(`正在安装依赖: ${name}`, { tone: 'info', persist: true });
     const result = await api.installDependency(name);
     state.dependencies = result.items || [];
     state.dependencyHistory = result.history || [];
     els.dependencyNameInput.value = '';
     renderDependencies();
-    toast('依赖安装完成');
+    toast(`依赖安装完成: ${name}`, { tone: 'success', durationMs: 7000 });
   } catch (error) {
-    toast(formatError(error));
+    toast(formatError(error), { tone: 'error', durationMs: 9000 });
+  } finally {
+    state.installingDependency = false;
+    els.installDependencyButton.disabled = false;
+    els.installDependencyButton.textContent = '安装依赖';
   }
 }
 
@@ -1923,15 +2244,28 @@ function renderRuns() {
     els.runList.innerHTML = '<div class="empty">暂无运行记录</div>';
     return;
   }
-  els.runList.innerHTML = state.runs.map((run) => {
-    const task = state.tasks.find((item) => item.id === run.taskId);
-    return `
-      <button class="file-item ${state.currentRunId === run.id ? 'active' : ''}" data-run-id="${escapeAttr(run.id)}">
-        <strong>${escapeHtml(task?.name || run.id)}</strong>
-        <small>${escapeHtml(formatStatus(run.status))} · ${escapeHtml(formatDateTime(run.startedAt))} · ${escapeHtml(formatTrigger(run.trigger))}</small>
-      </button>
-    `;
-  }).join('');
+  const groups = groupRunsByScript(state.runs);
+  els.runList.innerHTML = `
+    <div class="run-groups">
+      ${groups.map((group) => `
+        <section class="run-group">
+          <div class="run-group-header">
+            <strong title="${escapeAttr(group.title)}">${escapeHtml(group.title)}</strong>
+            <small title="${escapeAttr(group.subtitle)}">${escapeHtml(group.subtitle)} · ${group.runs.length} 次</small>
+          </div>
+          ${group.runs.map((run) => `
+            <button class="file-item run-item ${state.currentRunId === run.id ? 'active' : ''}" data-run-id="${escapeAttr(run.id)}">
+              <span class="run-item-main">
+                <strong>${escapeHtml(formatDateTime(run.startedAt))}</strong>
+                <small>${escapeHtml(formatTrigger(run.trigger))} · ${escapeHtml(formatDuration(run.durationMs))}</small>
+              </span>
+              <span class="tag ${escapeAttr(statusTagClass(run.status))}">${escapeHtml(formatStatus(run.status))}</span>
+            </button>
+          `).join('')}
+        </section>
+      `).join('')}
+    </div>
+  `;
   document.querySelectorAll('[data-run-id]').forEach((button) => button.addEventListener('click', () => showRunLog(button.dataset.runId)));
 }
 
@@ -1939,22 +2273,48 @@ async function refreshRuns() {
   await refreshTasksAndRuns();
   renderMetrics();
   renderRuns();
+  if (state.currentRunId) await showRunLog(state.currentRunId);
 }
 
-async function showRunLog(runId) {
+async function showRunLog(runId, options = {}) {
+  stopLogRefresh();
+  const run = await renderRunLog(runId, options);
+  if (run?.status === 'running') startLogRefresh(runId);
+}
+
+async function renderRunLog(runId, options = {}) {
   try {
+    const shouldAutoScroll = isLogViewerNearBottom();
     const [run, log] = await Promise.all([
       api.getRun(runId),
       api.getRunLog(runId, 'combined')
     ]);
+    upsertRunRecord(run);
     state.currentRunId = runId;
     const task = state.tasks.find((item) => item.id === run.taskId);
-    els.logTitle.textContent = task?.name || run.id;
-    els.logMeta.textContent = `${formatStatus(run.status)} · ${formatDateTime(run.startedAt)} · ${formatDuration(run.durationMs)} · ${formatTrigger(run.trigger)}`;
-    els.logViewer.textContent = log.text || '日志为空';
+    const display = getRunDisplayInfo(run, task);
+    const statusSuffix = run.status === 'running' ? ' · 实时刷新中' : '';
+    els.logTitle.textContent = display.title;
+    els.logMeta.textContent = `${formatStatus(run.status)}${statusSuffix} · ${formatDateTime(run.startedAt)} · ${formatDuration(run.durationMs)} · ${formatTrigger(run.trigger)} · ${display.subtitle}`;
+    const text = log.text || (run.status === 'running' ? '运行中，等待脚本输出...' : '日志为空');
+    const changed = els.logViewer.textContent !== text;
+    if (changed) {
+      els.logViewer.textContent = text;
+      if (shouldAutoScroll || run.status === 'running') {
+        els.logViewer.scrollTop = els.logViewer.scrollHeight;
+      }
+    }
     renderRuns();
+    if (run.status !== 'running') {
+      await refreshTasksAndRuns();
+      renderMetrics();
+      renderTasks();
+      renderRuns();
+    }
+    return run;
   } catch (error) {
-    toast(formatError(error));
+    if (!options.silent) toast(formatError(error));
+    return undefined;
   }
 }
 
@@ -2162,6 +2522,73 @@ function updateAppearanceLabels(appearance) {
   els.radiusValue.textContent = String(appearance.radius);
 }
 
+function startLogRefresh(runId) {
+  stopLogRefresh();
+  logRefreshTimer = setInterval(async () => {
+    if (state.currentRunId !== runId) {
+      stopLogRefresh();
+      return;
+    }
+    const run = await renderRunLog(runId, { silent: true });
+    if (!run || run.status !== 'running') {
+      stopLogRefresh();
+    }
+  }, 1000);
+}
+
+function stopLogRefresh() {
+  if (!logRefreshTimer) return;
+  clearInterval(logRefreshTimer);
+  logRefreshTimer = undefined;
+}
+
+function isLogViewerNearBottom() {
+  if (!els.logViewer) return true;
+  return els.logViewer.scrollHeight - els.logViewer.scrollTop - els.logViewer.clientHeight < 60;
+}
+
+function upsertRunRecord(run) {
+  if (!run?.id) return;
+  const index = state.runs.findIndex((item) => item.id === run.id);
+  if (index >= 0) {
+    state.runs[index] = { ...state.runs[index], ...run };
+  } else {
+    state.runs.unshift(run);
+  }
+  state.runs = state.runs.toSorted((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+}
+
+function groupRunsByScript(runs) {
+  const sorted = [...runs].toSorted((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  const groups = new Map();
+  for (const run of sorted) {
+    const task = state.tasks.find((item) => item.id === run.taskId);
+    const display = getRunDisplayInfo(run, task);
+    const key = display.key;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        title: display.title,
+        subtitle: display.subtitle,
+        latestAt: run.startedAt,
+        runs: []
+      });
+    }
+    groups.get(key).runs.push(run);
+  }
+  return [...groups.values()].toSorted((a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime());
+}
+
+function getRunDisplayInfo(run, task) {
+  const scriptPath = task?.scriptPath || run.scriptPath || '';
+  const name = task?.name || run.name || scriptPath.split('/').pop() || run.id;
+  return {
+    key: scriptPath || run.taskId || run.id,
+    title: name,
+    subtitle: scriptPath || `运行 ID: ${run.id}`
+  };
+}
+
 function latestRunForTask(taskId) {
   return state.runs.find((run) => run.taskId === taskId);
 }
@@ -2226,6 +2653,36 @@ function renderLabels(labels = []) {
     : '<span class="muted">-</span>';
 }
 
+function upsertSubscription(subscription) {
+  if (!subscription?.id) return;
+  const index = state.subscriptions.findIndex((item) => item.id === subscription.id);
+  if (index >= 0) {
+    state.subscriptions[index] = { ...state.subscriptions[index], ...subscription };
+  } else {
+    state.subscriptions.unshift(subscription);
+  }
+  renderSubscriptions();
+}
+
+function getSubscriptionName(id) {
+  const subscription = state.subscriptions.find((item) => item.id === id);
+  return subscription?.name || id || '未命名订阅';
+}
+
+function formatSubscriptionRunSuccess(result, fallbackName) {
+  const name = result?.name || fallbackName || '订阅';
+  const target = result?.localPath ? `，目录：${result.localPath}` : '';
+  const detail = result?.lastResult ? `，${result.lastResult}` : '';
+  return `订阅运行成功：${name}${detail}${target}`;
+}
+
+function setSubscriptionRunStatus(message, tone = 'info') {
+  if (!els.subscriptionRunStatus) return;
+  els.subscriptionRunStatus.textContent = message;
+  els.subscriptionRunStatus.dataset.tone = tone;
+  els.subscriptionRunStatus.hidden = false;
+}
+
 function keepExistingSelection(selection, ids) {
   const idSet = new Set(ids);
   return new Set([...selection].filter((id) => idSet.has(id)));
@@ -2277,6 +2734,17 @@ function formatStatus(status) {
     stopped: '已停止'
   };
   return map[status] || status || '-';
+}
+
+function statusTagClass(status) {
+  const map = {
+    running: 'blue',
+    success: 'green',
+    failed: 'red',
+    timeout: 'amber',
+    stopped: 'gray'
+  };
+  return map[status] || 'gray';
 }
 
 function formatTrigger(trigger) {
@@ -2356,13 +2824,16 @@ function escapeAttr(value) {
   return escapeHtml(value).replaceAll("'", '&#39;');
 }
 
-function toast(message) {
+function toast(message, options = {}) {
   els.toast.textContent = String(message || '');
+  els.toast.dataset.tone = options.tone || 'info';
   els.toast.hidden = false;
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => {
-    els.toast.hidden = true;
-  }, 3600);
+  if (!options.persist) {
+    toast.timer = setTimeout(() => {
+      els.toast.hidden = true;
+    }, options.durationMs || 3600);
+  }
 }
 
 function showFatalError(error) {

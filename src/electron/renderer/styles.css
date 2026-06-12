@@ -614,10 +614,42 @@ pre,
 }
 
 .script-batch-bar {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto auto auto minmax(0, 1fr);
   align-items: center;
+  justify-content: start;
+  gap: 6px;
   margin-bottom: 8px;
-  padding: 8px;
+  border-radius: 10px;
+  padding: 6px;
+}
+
+.script-batch-bar .selection-text {
+  justify-self: end;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.run-status {
+  margin: 0 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 10px;
+  padding: 8px 10px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.run-status[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--red) 42%, var(--line));
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.run-status[data-tone="info"] {
+  color: var(--muted);
+  background: var(--surface-soft);
 }
 
 .pagination-bar {
@@ -724,6 +756,12 @@ pre,
   background: var(--amber-soft);
 }
 
+.tag.gray {
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--surface-soft);
+}
+
 .row-actions {
   display: flex;
   flex-wrap: nowrap;
@@ -807,6 +845,39 @@ pre,
   height: calc(100vh - 94px);
 }
 
+.script-split {
+  --script-list-width: 320px;
+  grid-template-columns: minmax(220px, var(--script-list-width)) 8px minmax(360px, 1fr);
+  gap: 6px;
+}
+
+.split-resizer {
+  align-self: stretch;
+  border-radius: 999px;
+  cursor: col-resize;
+  position: relative;
+}
+
+.split-resizer::before {
+  position: absolute;
+  inset: 8px 3px;
+  border-radius: 999px;
+  background: var(--line);
+  content: "";
+  transition: background 140ms ease, inset 140ms ease;
+}
+
+.split-resizer:hover::before,
+.resizing-script-list .split-resizer::before {
+  inset: 8px 2px;
+  background: color-mix(in srgb, var(--accent) 62%, var(--line));
+}
+
+.resizing-script-list {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .side-list,
 .editor-panel {
   min-height: 0;
@@ -819,7 +890,113 @@ pre,
 }
 
 .script-batch-bar:not([hidden]) + .file-list {
-  height: calc(100% - 110px);
+  height: calc(100% - 92px);
+}
+
+#script .panel {
+  padding: 10px;
+}
+
+#script .toolbar.compact {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#script .toolbar.compact strong {
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+#script .toolbar.compact button,
+#script .editor-panel .toolbar button,
+.script-batch-bar button {
+  min-height: 26px;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#script .toolbar.compact .primary {
+  padding-inline: 10px;
+}
+
+.script-tree {
+  display: grid;
+  gap: 1px;
+  padding: 1px;
+}
+
+.script-tree-node {
+  display: grid;
+  gap: 1px;
+}
+
+.script-tree-row {
+  display: grid;
+  grid-template-columns: 15px 13px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px 2px calc(6px + var(--depth, 0) * 10px);
+  color: var(--ink);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.script-tree-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.script-tree-toggle {
+  display: grid;
+  width: 15px;
+  min-height: 19px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.script-tree-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.script-tree-dir input,
+.script-file-item input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.script-tree-name {
+  display: grid;
+  min-width: 0;
+  gap: 0;
+}
+
+.script-tree-name strong,
+.script-tree-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-tree-name small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.script-tree-children {
+  display: grid;
+  gap: 1px;
 }
 
 .file-item {
@@ -837,22 +1014,30 @@ pre,
 }
 
 .script-file-item {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 8px;
-}
-
-.script-file-item input {
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-  accent-color: var(--accent);
+  grid-template-columns: 13px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 0;
+  min-height: 24px;
+  border-radius: 6px;
+  padding: 3px 6px 3px calc(6px + var(--depth, 0) * 10px + 19px);
+  font-size: 11.5px;
 }
 
 .script-file-meta {
   display: grid;
   min-width: 0;
-  gap: 4px;
+  gap: 0;
+}
+
+.script-file-meta small {
+  color: var(--muted);
+}
+
+.script-file-size {
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
 }
 
 .file-item:hover,
@@ -873,6 +1058,60 @@ pre,
 }
 
 .file-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.run-group {
+  display: grid;
+  gap: 4px;
+}
+
+.run-group-header {
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px 4px;
+}
+
+.run-group-header strong,
+.run-group-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-group-header strong {
+  color: var(--accent-strong);
+  font-size: 13px;
+}
+
+.run-group-header small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.run-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  padding: 7px 9px;
+}
+
+.run-item-main {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.run-item-main strong,
+.run-item-main small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1239,6 +1478,22 @@ pre,
   box-shadow: var(--shadow);
   font-size: 13px;
   font-weight: 700;
+}
+
+.toast[data-tone="success"] {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.toast[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--red) 42%, var(--line));
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.toast[data-tone="info"] {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
 @media (max-width: 1180px) {

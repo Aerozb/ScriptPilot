@@ -104,6 +104,7 @@
                 <span id="subscriptionSelectionText" class="selection-text">已选择 0 项</span>
               </div>
             </div>
+            <div id="subscriptionRunStatus" class="run-status" hidden></div>
             <div id="subscriptionTable" class="table-wrap"></div>
           </div>
         </section>
@@ -152,9 +153,9 @@
           </div>
         </section>
 
-        <section id="script" class="page">
-          <div class="split">
-            <div class="panel side-list">
+        <section id="script" class="page script-page">
+          <div id="scriptSplit" class="split script-split">
+            <div class="panel side-list script-side-list">
               <div class="toolbar compact">
                 <strong>脚本文件</strong>
                 <button class="ghost" id="openScriptsDirButton" type="button">打开目录</button>
@@ -165,10 +166,11 @@
                 <button class="ghost" id="batchRunScriptsButton" type="button">批量运行</button>
                 <button class="danger" id="batchDeleteScriptsButton" type="button">批量删除</button>
                 <button class="ghost" id="clearScriptSelectionButton" type="button">清空选择</button>
-                <span id="scriptSelectionText" class="selection-text">已选择 0 项</span>
+                <span id="scriptSelectionText" class="selection-text">0 项</span>
               </div>
               <div id="scriptList" class="file-list"></div>
             </div>
+            <div id="scriptSplitResizer" class="split-resizer" role="separator" aria-orientation="vertical" aria-label="调整脚本列表宽度"></div>
             <div class="panel editor-panel">
               <div class="toolbar">
                 <div class="editor-title">
@@ -466,7 +468,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
         </div>
         <input id="subscriptionIdInput" type="hidden" />
         <label><span>订阅名称</span><input id="subscriptionNameInput" required /></label>
-        <label><span>订阅地址</span><input id="subscriptionUrlInput" placeholder="支持 https://github.com/owner/repo.git、owner/repo.git、git@github.com:owner/repo.git、ql repo ..." /></label>
+        <label><span>订阅地址</span><input id="subscriptionUrlInput" placeholder="支持 https://github.com/owner/repo.git、owner/repo.git、git@github.com:owner/repo.git、ql repo/raw ..." /></label>
         <label><span>分支</span><input id="subscriptionBranchInput" placeholder="main，GitHub tree/raw 地址可留空" /></label>
         <label><span>Cron 表达式</span><input id="subscriptionScheduleInput" placeholder="0 0 * * *" /></label>
         <label><span>状态</span><select id="subscriptionStatusInput"><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>

@@ -20,8 +20,9 @@ export async function runNodeScript(input) {
   await mkdir(path.dirname(input.stderrPath), { recursive: true });
 
   const startedAt = new Date();
-  const stdoutFile = createWriteStream(input.stdoutPath, { encoding: 'utf8' });
-  const stderrFile = createWriteStream(input.stderrPath, { encoding: 'utf8' });
+  const streamOptions = { encoding: 'utf8', flags: input.appendLog ? 'a' : 'w' };
+  const stdoutFile = createWriteStream(input.stdoutPath, streamOptions);
+  const stderrFile = createWriteStream(input.stderrPath, streamOptions);
   const args = [input.scriptPath, ...(input.args || [])];
   let stdoutText = '';
   let stderrText = '';
