@@ -1464,6 +1464,37 @@ pre,
   max-height: 44vh;
 }
 
+.subscription-log-card {
+  grid-template-rows: auto minmax(320px, 1fr) auto;
+  max-height: calc(100vh - 56px);
+}
+
+.subscription-log-card .modal-head small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.subscription-log-viewer {
+  min-height: 360px;
+  max-height: 62vh;
+  margin: 0;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: var(--radius-base);
+  padding: 14px 16px;
+  color: #163426;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, #ffffff), #ffffff 120px);
+  font-family: "Cascadia Code", Consolas, "Microsoft YaHei UI", monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .toast {
   position: fixed;
   right: 22px;

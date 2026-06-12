@@ -140,6 +140,7 @@ function bindEvents() {
   els.subscriptionForm.addEventListener('submit', handleSubscriptionSubmit);
   els.batchRunSubscriptionsButton.addEventListener('click', () => batchRunSubscriptions());
   els.batchDeleteSubscriptionsButton.addEventListener('click', () => batchDeleteSubscriptions());
+  els.copySubscriptionLogButton?.addEventListener('click', () => copySubscriptionLog());
 
   els.refreshConfigsButton.addEventListener('click', () => refreshConfigs());
   els.openConfigsDirButton.addEventListener('click', () => openPortableDirectory('data/configs'));
@@ -1490,7 +1491,7 @@ function renderSubscriptions() {
           <th style="width: 120px">状态</th>
           <th style="width: 150px">最后运行</th>
           <th style="width: 220px">运行结果</th>
-          <th style="width: 160px">操作</th>
+          <th style="width: 190px">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -1504,7 +1505,7 @@ function renderSubscriptions() {
             <td>${item.status === 'enabled' ? '<span class="tag green">启用</span>' : '<span class="tag red">禁用</span>'}</td>
             <td>${item.lastPulledAt ? escapeHtml(formatDateTime(item.lastPulledAt)) : '-'}</td>
             <td class="path-col" title="${escapeAttr(item.lastResult || '-')}">${escapeHtml(item.lastResult || '-')}</td>
-            <td><div class="row-actions"><button class="link-button" data-run-subscription="${escapeAttr(item.id)}" ${state.runningSubscriptionIds.has(item.id) ? 'disabled' : ''}>${state.runningSubscriptionIds.has(item.id) ? '运行中...' : '运行'}</button><button class="link-button" data-edit-subscription="${escapeAttr(item.id)}">编辑</button><button class="link-button red" data-delete-subscription="${escapeAttr(item.id)}">删除</button></div></td>
+            <td><div class="row-actions"><button class="link-button" data-run-subscription="${escapeAttr(item.id)}" ${state.runningSubscriptionIds.has(item.id) ? 'disabled' : ''}>${state.runningSubscriptionIds.has(item.id) ? '运行中...' : '运行'}</button><button class="link-button" data-log-subscription="${escapeAttr(item.id)}">日志</button><button class="link-button" data-edit-subscription="${escapeAttr(item.id)}">编辑</button><button class="link-button red" data-delete-subscription="${escapeAttr(item.id)}">删除</button></div></td>
           </tr>
         `).join('')}
       </tbody>
@@ -1530,6 +1531,11 @@ function renderSubscriptions() {
   document.querySelectorAll('[data-run-subscription]').forEach((button) => button.addEventListener('click', async (event) => {
     event.stopPropagation();
     await runSubscription(button.dataset.runSubscription);
+  }));
+  document.querySelectorAll('[data-log-subscription]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const subscription = state.subscriptions.find((item) => item.id === button.dataset.logSubscription);
+    openSubscriptionLogModal(subscription, getSubscriptionLogText(subscription), subscription?.lastPulledAt ? `上次拉取：${formatDateTime(subscription.lastPulledAt)}` : '暂无拉取记录');
   }));
   document.querySelectorAll('[data-edit-subscription]').forEach((button) => button.addEventListener('click', (event) => {
     event.stopPropagation();
@@ -1604,6 +1610,8 @@ async function handleSubscriptionSubmit(event) {
 
 async function runSubscription(id) {
   const name = getSubscriptionName(id);
+  const openingText = `正在拉取订阅：${name}\n\nGit 拉取中，请稍候...`;
+  openSubscriptionLogModal({ id, name }, openingText, '拉取中');
   setSubscriptionRunStatus(`正在运行订阅：${name}`, 'info');
   state.runningSubscriptionIds.add(id);
   renderSubscriptions();
@@ -1616,10 +1624,15 @@ async function runSubscription(id) {
       refreshScripts(),
       refreshQinglongOverview()
     ]);
+    openSubscriptionLogModal(result, getSubscriptionLogText(result), result?.lastPulledAt ? `拉取完成：${formatDateTime(result.lastPulledAt)}` : '拉取完成');
     const message = formatSubscriptionRunSuccess(result, name);
     setSubscriptionRunStatus(message, 'success');
     toast(message, { tone: 'success', durationMs: 7000 });
   } catch (error) {
+    await refreshSubscriptions().catch(() => undefined);
+    const failed = state.subscriptions.find((item) => item.id === id);
+    const logText = getSubscriptionLogText(failed) || `${openingText}\n\n拉取失败：${formatError(error)}`;
+    openSubscriptionLogModal(failed || { id, name }, logText, failed?.lastPulledAt ? `拉取失败：${formatDateTime(failed.lastPulledAt)}` : '拉取失败');
     const message = `订阅运行失败：${formatError(error)}`;
     setSubscriptionRunStatus(message, 'error');
     toast(message, { tone: 'error', durationMs: 8000 });
@@ -1632,22 +1645,29 @@ async function runSubscription(id) {
 async function batchRunSubscriptions() {
   const ids = [...state.selectedSubscriptionIds];
   if (!ids.length) return;
+  openSubscriptionLogModal({ name: `批量运行 ${ids.length} 个订阅` }, `正在批量拉取 ${ids.length} 个订阅...\n`, '批量拉取中');
   setSubscriptionRunStatus(`正在运行 ${ids.length} 个订阅...`, 'info');
   ids.forEach((id) => state.runningSubscriptionIds.add(id));
   renderSubscriptions();
   toast(`正在运行 ${ids.length} 个订阅...`, { tone: 'info', persist: true });
   const results = [];
+  const logSections = [];
   try {
     for (const id of ids) {
+      appendSubscriptionLog(`\n===== ${getSubscriptionName(id)} =====\n正在拉取...`);
       const result = await api.runSubscription(id);
       results.push(result);
       upsertSubscription(result);
+      logSections.push(formatSubscriptionLogSection(result, getSubscriptionName(id)));
+      setSubscriptionLogContent(logSections.join('\n\n'));
     }
     await Promise.all([
       refreshSubscriptions(),
       refreshScripts(),
       refreshQinglongOverview()
     ]);
+    setSubscriptionLogContent(logSections.join('\n\n') || '批量拉取完成，暂无日志');
+    els.subscriptionLogMeta.textContent = `批量拉取完成：${results.length}/${ids.length}`;
     const summaries = results
       .map((item) => item?.lastResult)
       .filter(Boolean)
@@ -1667,6 +1687,15 @@ async function batchRunSubscriptions() {
       refreshScripts(),
       refreshQinglongOverview()
     ]);
+    const latestSections = ids
+      .map((id) => state.subscriptions.find((item) => item.id === id))
+      .filter(Boolean)
+      .map((item) => formatSubscriptionLogSection(item, getSubscriptionName(item.id)));
+    const failureText = latestSections.length
+      ? latestSections.join('\n\n')
+      : `批量拉取失败：${formatError(error)}`;
+    setSubscriptionLogContent(failureText);
+    els.subscriptionLogMeta.textContent = '批量拉取失败';
     const message = `订阅运行失败：${formatError(error)}`;
     setSubscriptionRunStatus(message, 'error');
     toast(message, { tone: 'error', durationMs: 8000 });
@@ -2662,6 +2691,55 @@ function upsertSubscription(subscription) {
     state.subscriptions.unshift(subscription);
   }
   renderSubscriptions();
+}
+
+function openSubscriptionLogModal(subscription, text, metaText = '') {
+  if (!els.subscriptionLogModal) return;
+  const name = subscription?.name || (subscription?.id ? getSubscriptionName(subscription.id) : '') || '订阅';
+  els.subscriptionLogTitle.textContent = `订阅拉取日志 - ${name}`;
+  els.subscriptionLogMeta.textContent = metaText || '订阅拉取日志';
+  setSubscriptionLogContent(text || getSubscriptionLogText(subscription) || '暂无日志');
+  if (!els.subscriptionLogModal.open) {
+    els.subscriptionLogModal.showModal();
+  }
+}
+
+function setSubscriptionLogContent(text) {
+  if (!els.subscriptionLogViewer) return;
+  els.subscriptionLogViewer.textContent = String(text || '暂无日志');
+  requestAnimationFrame(() => {
+    els.subscriptionLogViewer.scrollTop = els.subscriptionLogViewer.scrollHeight;
+  });
+}
+
+function appendSubscriptionLog(text) {
+  const current = els.subscriptionLogViewer?.textContent || '';
+  setSubscriptionLogContent(`${current}${current.endsWith('\n') ? '' : '\n'}${text}`);
+}
+
+function getSubscriptionLogText(subscription) {
+  return subscription?.lastLog || subscription?.lastResult || '暂无日志';
+}
+
+function formatSubscriptionLogSection(subscription, fallbackName) {
+  const name = subscription?.name || fallbackName || '订阅';
+  const status = subscription?.lastPulledAt ? `时间：${formatDateTime(subscription.lastPulledAt)}` : '时间：-';
+  const result = subscription?.lastResult ? `结果：${subscription.lastResult}` : '结果：-';
+  return `===== ${name} =====\n${status}\n${result}\n\n${getSubscriptionLogText(subscription)}`;
+}
+
+async function copySubscriptionLog() {
+  const text = els.subscriptionLogViewer?.textContent || '';
+  if (!text.trim()) {
+    toast('暂无日志可复制', { tone: 'info' });
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('日志已复制', { tone: 'success' });
+  } catch {
+    toast('复制日志失败', { tone: 'error' });
+  }
 }
 
 function getSubscriptionName(id) {

@@ -23,6 +23,8 @@ const SCRIPT_SUBSCRIPTION_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
 const MAX_REPOSITORY_FILES = 5000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_SUBSCRIPTION_LOG_CHARS = 120000;
+const GITHUB_ACCELERATOR_BASE_URL = 'https://ghfast.top/';
 
 export class LocalQinglongService {
   constructor(paths) {
@@ -239,14 +241,18 @@ export class LocalQinglongService {
     const rows = await this.subscriptionStore.read();
     const index = rows.findIndex((item) => item.id === id);
     if (index < 0) throw new AppError('SUBSCRIPTION_NOT_FOUND', `订阅不存在: ${id}`);
+    const logger = createSubscriptionLogger(rows[index]);
     try {
+      logger.info(`开始拉取订阅：${rows[index].name}`);
       const result = await pullSubscriptionFiles({
         subscription: rows[index],
         paths: this.paths,
         scriptRoot: this.scriptRoot,
         repoRoot: this.repoRoot,
-        rawRoot: this.rawRoot
+        rawRoot: this.rawRoot,
+        logger
       });
+      logger.info(`拉取完成：${result.files.length} 个文件 -> ${result.localPath}`);
       rows[index] = {
         ...rows[index],
         subscriptionFolder: result.subscriptionFolder,
@@ -254,6 +260,7 @@ export class LocalQinglongService {
         repoPath: result.repoPath,
         lastPulledAt: new Date().toISOString(),
         lastResult: `已拉取 ${result.files.length} 个文件到 ${result.localPath}`,
+        lastLog: logger.toText(),
         lastFiles: result.files,
         lastError: undefined,
         sourceType: result.sourceType,
@@ -263,10 +270,12 @@ export class LocalQinglongService {
       return rows[index];
     } catch (error) {
       const message = error instanceof AppError ? error.message : String(error?.message || error);
+      logger.error(`拉取失败：${message}`);
       rows[index] = {
         ...rows[index],
         lastPulledAt: new Date().toISOString(),
         lastResult: `拉取失败: ${message}`,
+        lastLog: logger.toText(),
         lastError: message,
         updatedAt: new Date().toISOString()
       };
@@ -357,7 +366,9 @@ async function pullSubscriptionFiles(input) {
     throw new AppError('INVALID_SUBSCRIPTION_URL', '订阅地址不能为空');
   }
 
+  const logger = input.logger;
   const source = parseSubscriptionSource(input.subscription);
+  logger?.info(`解析订阅源：${describeSubscriptionSource(source)}`);
   const subscriptionFolder = createSubscriptionFolder(input.subscription.name, input.subscription.id, source);
   const previousFolder = input.subscription.subscriptionFolder ? sanitizePathPart(input.subscription.subscriptionFolder) : '';
   const repoRoot = input.repoRoot || path.join(path.dirname(input.scriptRoot), 'repo');
@@ -368,9 +379,12 @@ async function pullSubscriptionFiles(input) {
   await mkdir(repoRoot, { recursive: true });
   await mkdir(rawRoot, { recursive: true });
   await mkdir(input.scriptRoot, { recursive: true });
+  logger?.info(`脚本目录：data/scripts/${subscriptionFolder}`);
+  logger?.info(`仓库缓存：data/repo/${subscriptionFolder}`);
 
   const currentFolder = sanitizePathPart(subscriptionFolder);
   if (previousFolder && previousFolder !== currentFolder) {
+    logger?.info(`订阅目录名已变化，清理旧目录：${previousFolder}`);
     const oldScriptFolderPath = path.join(input.scriptRoot, previousFolder);
     const oldRepoFolderPath = path.join(repoRoot, previousFolder);
     const oldRawFilePath = path.join(rawRoot, `${previousFolder}.js`);
@@ -391,6 +405,7 @@ async function pullSubscriptionFiles(input) {
     await rm(rawFilePath, { force: true });
   }
   await mkdir(scriptTargetRoot, { recursive: true });
+  logger?.info('已清理本次导入目录，准备重新导入脚本');
 
   const result = await downloadSubscriptionSource(source, {
     paths: input.paths,
@@ -398,7 +413,8 @@ async function pullSubscriptionFiles(input) {
     rawRoot,
     rawFilePath: rawTargetPath,
     scriptRoot: scriptTargetRoot,
-    subscriptionFolder
+    subscriptionFolder,
+    logger
   });
   const files = result.files;
   if (!files.length) {
@@ -406,6 +422,8 @@ async function pullSubscriptionFiles(input) {
   }
 
   await ensureSubscriptionSupportFiles(scriptTargetRoot);
+  logger?.success(`导入完成：${files.length} 个文件`);
+  logFileList(logger, '导入清单', files);
 
   return {
     subscriptionFolder,
@@ -623,25 +641,33 @@ async function downloadGitHubRepository(source, targets) {
     throw new AppError('PORTABLE_PATHS_REQUIRED', '仓库订阅缺少绿色目录上下文');
   }
 
+  const logger = targets.logger;
   const prefix = normalizeRepoPath(source.subPath);
   const gitRuntime = await resolveGitRuntime(targets.paths);
   const cloneUrl = createGitHubCloneUrl(source);
-  await syncGitRepository({
+  logger?.info(`Git 运行时：${gitRuntime.version || 'unknown'}（${gitRuntime.source || 'unknown'}）`);
+  logger?.info(`仓库地址：${cloneUrl}`);
+  if (source.branch) logger?.info(`指定分支：${source.branch}`);
+  if (prefix) logger?.info(`仓库子目录：${prefix}`);
+  await syncGitRepositoryWithFallback({
     gitRuntime,
     paths: targets.paths,
     cloneUrl,
     branch: source.branch,
-    targetRoot: targets.repoRoot
+    targetRoot: targets.repoRoot,
+    logger
   });
 
   const sourceRoot = prefix ? path.join(targets.repoRoot, prefix) : targets.repoRoot;
   await assertInside(targets.repoRoot, sourceRoot);
   await assertDirectoryExists(sourceRoot, 'SUBSCRIPTION_SUBPATH_NOT_FOUND', `订阅仓库目录不存在: ${prefix || '/'}`);
+  logger?.info(`扫描仓库文件：${prefix || '/'}`);
 
   const repoEntries = await listPullableRepositoryFiles({
     sourceRoot,
     filters: source.filters
   });
+  logger?.info(`筛选到可导入文件：${repoEntries.length} 个`);
 
   const written = [];
   for (const entry of repoEntries) {
@@ -660,6 +686,7 @@ async function downloadGitHubRepository(source, targets) {
 }
 
 async function downloadGitHubFile(source, targets) {
+  const logger = targets.logger;
   const repoPath = normalizeRepoPath(source.repoPath);
   if (!pathShouldBePulled(repoPath, source.filters)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '订阅文件只支持 .js、.mjs、.cjs 或 package.json');
@@ -667,10 +694,14 @@ async function downloadGitHubFile(source, targets) {
   const branch = source.branch || await resolveGitHubBranch(source);
   const rawUrl = source.rawUrl || createGitHubRawUrl(source.owner, source.repo, branch, repoPath);
   const relativePath = path.posix.basename(repoPath);
+  logger?.info(`下载 GitHub 文件：${source.owner}/${source.repo}/${repoPath}`);
+  logger?.info(`文件分支：${branch}`);
   await writeRemoteFile({
     url: rawUrl,
+    fallbackUrl: createGitHubAcceleratedUrl(rawUrl),
     targetRoot: targets.repoRoot,
-    relativePath
+    relativePath,
+    logger
   });
   await copySubscriptionScript({
     sourceRoot: targets.repoRoot,
@@ -684,14 +715,17 @@ async function downloadGitHubFile(source, targets) {
 }
 
 async function downloadHttpFile(source, targets) {
+  const logger = targets.logger;
   const relativePath = sanitizePathPart(source.fileName);
   if (!pathShouldBePulled(relativePath)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '普通 HTTP 订阅只支持 .js、.mjs、.cjs 或 package.json');
   }
+  logger?.info(`下载 HTTP 文件：${source.fileName}`);
   await writeRemoteFile({
     url: source.url,
     targetRoot: targets.rawRoot,
-    relativePath: path.basename(targets.rawFilePath)
+    relativePath: path.basename(targets.rawFilePath),
+    logger
   });
   await copySingleFile(targets.rawFilePath, path.join(targets.scriptRoot, relativePath), targets.scriptRoot);
   return {
@@ -706,8 +740,17 @@ async function writeRemoteFile(input) {
 
   const filePath = path.join(input.targetRoot, safeRelativePath);
   await assertInside(input.targetRoot, filePath);
+  input.logger?.info(`请求远程文件：${input.url}`);
 
-  const content = await fetchText(input.url, `下载文件失败: ${safeRelativePath}`);
+  let content;
+  try {
+    content = await fetchText(input.url, `下载文件失败: ${safeRelativePath}`);
+  } catch (error) {
+    if (!input.fallbackUrl || input.fallbackUrl === input.url) throw error;
+    input.logger?.warn(`直连下载失败，切换 ghfast 加速重试：${formatLogError(error)}`);
+    input.logger?.info(`请求 ghfast 加速文件：${input.fallbackUrl}`);
+    content = await fetchText(input.fallbackUrl, `ghfast 加速下载文件失败: ${safeRelativePath}`);
+  }
   const size = Buffer.byteLength(content, 'utf8');
   if (size > MAX_SUBSCRIPTION_FILE_BYTES) {
     throw new AppError('SUBSCRIPTION_FILE_TOO_LARGE', `订阅文件过大: ${safeRelativePath}`);
@@ -715,6 +758,7 @@ async function writeRemoteFile(input) {
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, content, 'utf8');
+  input.logger?.success(`保存远程文件：${safeRelativePath}（${formatBytes(size)}）`);
 }
 
 async function fetchJson(url, errorMessage) {
@@ -763,18 +807,64 @@ function createGitHubCloneUrl(source) {
   return `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`;
 }
 
+async function syncGitRepositoryWithFallback(input) {
+  const attempts = [
+    {
+      name: 'GitHub 直连',
+      cloneUrl: input.cloneUrl
+    },
+    {
+      name: 'ghfast 加速',
+      cloneUrl: createGitHubAcceleratedUrl(input.cloneUrl)
+    }
+  ].filter((attempt, index, rows) => attempt.cloneUrl && rows.findIndex((item) => item.cloneUrl === attempt.cloneUrl) === index);
+
+  let lastError;
+  for (const [index, attempt] of attempts.entries()) {
+    if (index > 0) {
+      input.logger?.warn(`GitHub 直连拉取失败，切换 ${attempt.name} 重试`);
+      await rm(input.targetRoot, { recursive: true, force: true });
+    }
+
+    try {
+      input.logger?.info(`拉取方式：${attempt.name}`);
+      await syncGitRepository({
+        ...input,
+        cloneUrl: attempt.cloneUrl
+      });
+      if (index > 0) input.logger?.success(`${attempt.name} 拉取成功`);
+      return;
+    } catch (error) {
+      lastError = error;
+      input.logger?.warn(`${attempt.name} 拉取失败：${formatLogError(error)}`);
+    }
+  }
+
+  throw lastError;
+}
+
+function createGitHubAcceleratedUrl(targetUrl) {
+  const url = String(targetUrl || '').trim();
+  if (!url || url.startsWith(GITHUB_ACCELERATOR_BASE_URL)) return url;
+  if (!/^https:\/\/(?:github\.com|raw\.githubusercontent\.com)\//i.test(url)) return url;
+  return `${GITHUB_ACCELERATOR_BASE_URL}${url}`;
+}
+
 async function syncGitRepository(input) {
   await mkdir(path.dirname(input.targetRoot), { recursive: true });
   await assertInside(path.dirname(input.targetRoot), input.targetRoot);
 
   if (await isGitRepository(input.targetRoot)) {
+    input.logger?.info('检测到已有 Git 仓库，执行增量更新');
     try {
       await updateGitRepository(input);
       return;
-    } catch {
+    } catch (error) {
+      input.logger?.warn(`增量更新失败，将删除缓存后重新克隆：${formatLogError(error)}`);
       await rm(input.targetRoot, { recursive: true, force: true });
     }
   } else {
+    input.logger?.info('未检测到本地仓库，执行首次克隆');
     await rm(input.targetRoot, { recursive: true, force: true });
   }
 
@@ -790,7 +880,8 @@ async function cloneGitRepository(input) {
     paths: input.paths,
     args,
     cwd: path.dirname(input.targetRoot),
-    label: '克隆订阅仓库'
+    label: '克隆订阅仓库',
+    logger: input.logger
   });
 }
 
@@ -800,7 +891,8 @@ async function updateGitRepository(input) {
     paths: input.paths,
     args: ['remote', 'set-url', 'origin', input.cloneUrl],
     cwd: input.targetRoot,
-    label: '更新订阅仓库地址'
+    label: '更新订阅仓库地址',
+    logger: input.logger
   });
 
   if (input.branch) {
@@ -809,21 +901,24 @@ async function updateGitRepository(input) {
       paths: input.paths,
       args: ['fetch', '--depth=1', 'origin', input.branch],
       cwd: input.targetRoot,
-      label: '拉取订阅仓库分支'
+      label: '拉取订阅仓库分支',
+      logger: input.logger
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
       paths: input.paths,
       args: ['checkout', '-B', input.branch, 'FETCH_HEAD'],
       cwd: input.targetRoot,
-      label: '切换订阅仓库分支'
+      label: '切换订阅仓库分支',
+      logger: input.logger
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
       paths: input.paths,
       args: ['reset', '--hard', 'FETCH_HEAD'],
       cwd: input.targetRoot,
-      label: '重置订阅仓库'
+      label: '重置订阅仓库',
+      logger: input.logger
     });
   } else {
     await runGitCommand({
@@ -831,14 +926,16 @@ async function updateGitRepository(input) {
       paths: input.paths,
       args: ['pull', '--ff-only', '--depth=1'],
       cwd: input.targetRoot,
-      label: '更新订阅仓库'
+      label: '更新订阅仓库',
+      logger: input.logger
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
       paths: input.paths,
       args: ['reset', '--hard', 'HEAD'],
       cwd: input.targetRoot,
-      label: '重置订阅仓库'
+      label: '重置订阅仓库',
+      logger: input.logger
     });
   }
 
@@ -847,7 +944,8 @@ async function updateGitRepository(input) {
     paths: input.paths,
     args: ['clean', '-ffd'],
     cwd: input.targetRoot,
-    label: '清理订阅仓库'
+    label: '清理订阅仓库',
+    logger: input.logger
   });
 }
 
@@ -862,6 +960,8 @@ async function isGitRepository(targetRoot) {
 
 async function runGitCommand(input) {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    input.logger?.command(input.label, createGitCommandLine(input.gitRuntime.gitPath, input.args), input.cwd);
     const child = spawn(input.gitRuntime.gitPath, input.args, {
       cwd: input.cwd,
       windowsHide: true,
@@ -879,6 +979,7 @@ async function runGitCommand(input) {
     });
 
     child.on('error', (error) => {
+      input.logger?.error(`${input.label} 启动失败：${error.message}`);
       reject(new AppError('GIT_COMMAND_SPAWN_FAILED', `${input.label}启动失败: ${error.message}`, {
         gitPath: input.gitRuntime.gitPath,
         args: input.args,
@@ -887,10 +988,15 @@ async function runGitCommand(input) {
     });
 
     child.on('close', (code) => {
+      const duration = formatDuration(Date.now() - startedAt);
+      if (stdout.trim()) input.logger?.output('stdout', stdout);
+      if (stderr.trim()) input.logger?.output('stderr', stderr);
       if (code === 0) {
+        input.logger?.success(`${input.label} 完成（${duration}）`);
         resolve({ stdout, stderr });
         return;
       }
+      input.logger?.error(`${input.label} 失败（退出码 ${code}，${duration}）`);
       reject(new AppError('GIT_COMMAND_FAILED', `${input.label}失败: ${stderr || stdout || `退出码 ${code}`}`, {
         gitPath: input.gitRuntime.gitPath,
         args: input.args,
@@ -900,6 +1006,123 @@ async function runGitCommand(input) {
       }));
     });
   });
+}
+
+function createSubscriptionLogger(subscription) {
+  const lines = [];
+  let totalChars = 0;
+  let truncated = false;
+
+  const addLine = (line) => {
+    const safeLine = redactLogText(line);
+    lines.push(safeLine);
+    totalChars += safeLine.length + 1;
+    while (totalChars > MAX_SUBSCRIPTION_LOG_CHARS && lines.length > 1) {
+      const removed = lines.shift();
+      totalChars -= removed.length + 1;
+      truncated = true;
+    }
+  };
+
+  const push = (level, message) => {
+    const timestamp = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+    const text = String(message ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    for (const line of text.split('\n')) {
+      addLine(`[${timestamp}] [${level}] ${line}`);
+    }
+  };
+
+  push('信息', `订阅：${subscription?.name || '未命名订阅'}`);
+  push('信息', `地址：${subscription?.url || '-'}`);
+
+  return {
+    info: (message) => push('信息', message),
+    success: (message) => push('成功', message),
+    warn: (message) => push('警告', message),
+    error: (message) => push('错误', message),
+    command: (label, commandLine, cwd) => {
+      push('命令', `${label}\n目录：${cwd || '-'}\n${commandLine}`);
+    },
+    output: (label, output) => {
+      const text = String(output || '').trimEnd();
+      if (text) push(label, text);
+    },
+    toText: () => {
+      const body = lines.join('\n');
+      if (!body) return '暂无日志';
+      return truncated ? `日志过长，已保留最近 ${Math.round(MAX_SUBSCRIPTION_LOG_CHARS / 1024)}KB。\n${body}` : body;
+    }
+  };
+}
+
+function describeSubscriptionSource(source) {
+  if (source.type === 'github-repo') {
+    const branch = source.branch ? `，分支 ${source.branch}` : '';
+    const subPath = source.subPath ? `，目录 ${source.subPath}` : '';
+    return `GitHub 仓库 ${source.owner}/${source.repo}${branch}${subPath}`;
+  }
+  if (source.type === 'github-file' || source.type === 'github-raw-file') {
+    const branch = source.branch ? `，分支 ${source.branch}` : '';
+    return `GitHub 文件 ${source.owner}/${source.repo}/${source.repoPath}${branch}`;
+  }
+  if (source.type === 'http-file') {
+    return `HTTP 文件 ${source.fileName}`;
+  }
+  return source.type || '未知类型';
+}
+
+function logFileList(logger, title, files = []) {
+  if (!logger || !files.length) return;
+  const visibleFiles = files.slice(0, 80);
+  logger.info(`${title}：${files.length} 个文件`);
+  for (const file of visibleFiles) {
+    logger.info(`  - ${file}`);
+  }
+  if (files.length > visibleFiles.length) {
+    logger.info(`  ... 还有 ${files.length - visibleFiles.length} 个文件未展开显示`);
+  }
+}
+
+function createGitCommandLine(gitPath, args = []) {
+  const command = path.basename(gitPath || 'git') || 'git';
+  return [command, ...args].map(formatCommandPart).join(' ');
+}
+
+function formatCommandPart(value) {
+  const text = String(value ?? '');
+  if (!text) return '""';
+  if (!/[\s"]/u.test(text)) return text;
+  return `"${text.replaceAll('"', '\\"')}"`;
+}
+
+function formatLogError(error) {
+  const message = error instanceof AppError ? error.message : String(error?.message || error);
+  return redactLogText(message).split('\n').slice(0, 12).join('\n');
+}
+
+function redactLogText(value) {
+  return String(value ?? '')
+    .replace(/\b(pt_key=)[^;&\s]+/gi, '$1***')
+    .replace(/\b(pt_pin=)[^;&\s]+/gi, '$1***')
+    .replace(/([?&](?:access_token|token|key|password|passwd|pwd)=)[^&#\s]+/gi, '$1***')
+    .replace(/\b(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1***@')
+    .replace(/\b(Authorization:\s*(?:Bearer|token)\s+)[^\s]+/gi, '$1***');
+}
+
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs < 0) return '0ms';
+  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
+  const minutes = Math.floor(durationMs / 60000);
+  const seconds = Math.round((durationMs % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function formatBytes(value) {
+  const size = Number(value) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function createGitProcessEnv(paths, gitRuntime) {

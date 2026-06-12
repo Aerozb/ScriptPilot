@@ -183,6 +183,8 @@ ql raw https://raw.githubusercontent.com/owner/repo/main/demo.js
 再次运行：git pull/fetch 后重置并清理工作区
 ```
 
+GitHub 仓库直连拉取失败时，会自动改用 `https://ghfast.top/https://github.com/...` 再拉取一次；Raw GitHub 文件直连下载失败时，也会改用 `https://ghfast.top/https://raw.githubusercontent.com/...` 重试。订阅页的拉取日志弹窗会显示直连和 ghfast 重试过程，方便判断网络问题。
+
 `ql raw`、Raw GitHub 文件和普通 HTTP 单文件仍走直接下载。这样保留青龙式仓库订阅体验，同时不要求用户系统额外安装 Git。
 
 ## 依赖

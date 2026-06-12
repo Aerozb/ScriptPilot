@@ -211,14 +211,25 @@ try {
     await expectText(page, '#subscription.page.active #subscriptionTable', name);
     const subscriptionRow = page.locator('#subscription.page.active #subscriptionTable tbody tr').filter({ hasText: name });
     await subscriptionRow.locator('[data-run-subscription]').click();
+    await page.locator('#subscriptionLogModal').waitFor({ state: 'visible' });
     await waitForSubscriptionRunSuccess(page, name);
+    await expectText(page, '#subscriptionLogViewer', '导入完成');
+    await expectText(page, '#subscriptionLogViewer', '请求远程文件');
     await expectText(page, '#subscription.page.active #subscriptionTable', '已拉取');
     const subscriptions = JSON.parse(await readFile(path.join(dataRoot, 'state', 'subscriptions.json'), 'utf8'));
     const subscription = subscriptions.find((item) => item.name === name);
     assert(subscription?.lastPulledAt, '订阅运行状态未写入 data/state/subscriptions.json');
+    assert(subscription?.lastLog?.includes('导入完成'), '订阅拉取日志未写入 data/state/subscriptions.json');
+    assert(subscription?.lastLog?.includes('请求远程文件'), '订阅拉取日志缺少下载过程');
     assert(subscription.localPath === `data/scripts/${subscription.subscriptionFolder}`, `订阅脚本目录异常: ${subscription.localPath}`);
     assert(subscription.repoPath === `data/raw/${subscription.subscriptionFolder}.js`, `订阅 raw 原始文件目录异常: ${subscription.repoPath}`);
     await expectText(page, '#subscription.page.active #subscriptionTable', subscription.localPath);
+    await page.locator('#subscriptionLogModal [data-close-modal]').last().click();
+    await page.locator('#subscriptionLogModal').waitFor({ state: 'hidden' });
+    await subscriptionRow.locator('[data-log-subscription]').click();
+    await page.locator('#subscriptionLogModal').waitFor({ state: 'visible' });
+    await expectText(page, '#subscriptionLogViewer', '导入完成');
+    await page.locator('#subscriptionLogModal [data-close-modal]').last().click();
     const subscriptionScriptPath = subscription.lastFiles?.find((item) => item.endsWith('/fixture.js'));
     assert(subscriptionScriptPath, '订阅没有拉取 fixture.js');
     await waitForFileContent(path.join(dataRoot, 'scripts', subscription.subscriptionFolder, 'fixture.js'), 'LOCAL_SUBSCRIPTION_OK');
@@ -264,6 +275,9 @@ try {
     assert(faker3?.subscriptionFolder === 'faker3', `faker3 订阅目录异常: ${faker3?.subscriptionFolder}`);
     assert(faker3?.localPath === 'data/scripts/faker3', `faker3 本地目录异常: ${faker3?.localPath}`);
     assert(faker3?.repoPath === 'data/repo/faker3', `faker3 仓库缓存目录异常: ${faker3?.repoPath}`);
+    await expectText(page, '#subscriptionLogViewer', 'faker3');
+    await page.locator('#subscriptionLogModal [data-close-modal]').last().click();
+    await page.locator('#subscriptionLogModal').waitFor({ state: 'hidden' });
   });
 
   await check('创建定时任务后可批量运行并查看日志', async () => {

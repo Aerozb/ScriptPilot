@@ -479,6 +479,23 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
       </form>
     </dialog>
 
+    <dialog id="subscriptionLogModal" class="modal wide">
+      <div class="modal-card subscription-log-card">
+        <div class="modal-head">
+          <div>
+            <h2 id="subscriptionLogTitle">订阅拉取日志</h2>
+            <small id="subscriptionLogMeta">等待拉取结果</small>
+          </div>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <pre id="subscriptionLogViewer" class="subscription-log-viewer">暂无日志</pre>
+        <div class="modal-actions">
+          <button class="ghost" id="copySubscriptionLogButton" type="button">复制日志</button>
+          <button class="primary" type="button" data-close-modal>关闭</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="confirmModal" class="modal confirm-modal">
       <div class="modal-card confirm-card">
         <div class="confirm-hero">
