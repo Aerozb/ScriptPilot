@@ -259,6 +259,7 @@ try {
       item.repoPath === 'data/repo/faker3' &&
       item.lastFiles?.includes('data/scripts/faker3/utils/baseCookie.js')
     ), 120000);
+    await waitForFile(path.join(dataRoot, 'repo', 'faker3', '.git', 'config'), 120000);
     await waitForFile(path.join(dataRoot, 'scripts', 'faker3', 'utils', 'baseCookie.js'), 120000);
     assert(faker3?.subscriptionFolder === 'faker3', `faker3 订阅目录异常: ${faker3?.subscriptionFolder}`);
     assert(faker3?.localPath === 'data/scripts/faker3', `faker3 本地目录异常: ${faker3?.localPath}`);

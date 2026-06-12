@@ -6,8 +6,8 @@ ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器，定位是
 
 - 绿色便携：发布目录根部只保留 `ScriptPilot.exe` 和 `app/`。
 - 数据不外溢：任务、日志、缓存、依赖、Electron 会话数据都写入 `app/data`。
-- 内置 Node：无需用户额外安装 Node/npm。
-- 青龙式订阅：支持 GitHub 仓库、`owner/repo.git`、`ql repo`、`ql raw`。
+- 内置 Node + Git：无需用户额外安装 Node/npm/git。
+- 青龙式订阅：支持 GitHub 仓库、`owner/repo.git`、`ql repo`、`ql raw`；仓库订阅走内置 Git clone/pull。
 - 自动依赖：脚本变更后预检依赖；运行时报缺模块时自动安装并重试。
 - 实时日志：运行后立刻打开日志页，前端 1 秒轮询一次日志，边执行边显示。
 - 本机 API：默认监听 `http://127.0.0.1:18760`，可通过 API 携带参数运行脚本。
@@ -40,7 +40,7 @@ scripts/        用户脚本和订阅脚本
 configs/        配置文件
 logs/           stdout/stderr 和应用日志
 node_modules/   自动安装的脚本依赖
-repo/           Git 仓库订阅缓存
+repo/           Git clone 后的仓库订阅缓存
 raw/            Raw 单文件订阅缓存
 cache/          npm 等缓存
 tmp/            临时目录

@@ -8,6 +8,7 @@ import { JsonStore } from '../../../shared/infrastructure/filesystem/json-store.
 import { AppError } from '../../../shared/errors/app-error.js';
 import { createPortableProcessEnv } from '../../../bootstrap/portable-paths.js';
 import { resolveNodeRuntime } from '../../runtime/infrastructure/node-runtime-resolver.js';
+import { resolveGitRuntime } from '../../runtime/infrastructure/git-runtime-resolver.js';
 
 const DEFAULT_CONFIGS = {
   'config.sh': '# ScriptPilot 本地青龙版配置\nexport QL_DIR=\"$PWD\"\n',
@@ -20,7 +21,7 @@ const DEFAULT_SCRIPT_SUPPORT_FILES = {
 };
 const SCRIPT_SUBSCRIPTION_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
-const MAX_REPOSITORY_FILES = 2000;
+const MAX_REPOSITORY_FILES = 5000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
 
 export class LocalQinglongService {
@@ -241,6 +242,7 @@ export class LocalQinglongService {
     try {
       const result = await pullSubscriptionFiles({
         subscription: rows[index],
+        paths: this.paths,
         scriptRoot: this.scriptRoot,
         repoRoot: this.repoRoot,
         rawRoot: this.rawRoot
@@ -366,20 +368,32 @@ async function pullSubscriptionFiles(input) {
   await mkdir(repoRoot, { recursive: true });
   await mkdir(rawRoot, { recursive: true });
   await mkdir(input.scriptRoot, { recursive: true });
-  for (const folder of new Set([previousFolder, sanitizePathPart(subscriptionFolder)].filter(Boolean))) {
+
+  const currentFolder = sanitizePathPart(subscriptionFolder);
+  if (previousFolder && previousFolder !== currentFolder) {
+    const oldScriptFolderPath = path.join(input.scriptRoot, previousFolder);
+    const oldRepoFolderPath = path.join(repoRoot, previousFolder);
+    const oldRawFilePath = path.join(rawRoot, `${previousFolder}.js`);
+    await assertInside(input.scriptRoot, oldScriptFolderPath);
+    await assertInside(repoRoot, oldRepoFolderPath);
+    await assertInside(rawRoot, oldRawFilePath);
+    await rm(oldScriptFolderPath, { recursive: true, force: true });
+    await rm(oldRepoFolderPath, { recursive: true, force: true });
+    await rm(oldRawFilePath, { force: true });
+  }
+
+  for (const folder of new Set([currentFolder].filter(Boolean))) {
     const scriptFolderPath = path.join(input.scriptRoot, folder);
-    const repoFolderPath = path.join(repoRoot, folder);
     const rawFilePath = path.join(rawRoot, `${folder}.js`);
     await assertInside(input.scriptRoot, scriptFolderPath);
-    await assertInside(repoRoot, repoFolderPath);
     await assertInside(rawRoot, rawFilePath);
     await rm(scriptFolderPath, { recursive: true, force: true });
-    await rm(repoFolderPath, { recursive: true, force: true });
     await rm(rawFilePath, { force: true });
   }
   await mkdir(scriptTargetRoot, { recursive: true });
 
   const result = await downloadSubscriptionSource(source, {
+    paths: input.paths,
     repoRoot: repoTargetRoot,
     rawRoot,
     rawFilePath: rawTargetPath,
@@ -605,35 +619,40 @@ async function downloadSubscriptionSource(source, targets) {
 }
 
 async function downloadGitHubRepository(source, targets) {
-  const branch = await resolveGitHubBranch(source);
-  const tree = await fetchJson(
-    `https://api.github.com/repos/${source.owner}/${source.repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`,
-    '读取 GitHub 仓库目录失败'
-  );
+  if (!targets.paths) {
+    throw new AppError('PORTABLE_PATHS_REQUIRED', '仓库订阅缺少绿色目录上下文');
+  }
+
   const prefix = normalizeRepoPath(source.subPath);
-  const repoEntries = (tree.tree || [])
-    .filter((entry) => entry.type === 'blob')
-    .filter((entry) => !prefix || entry.path === prefix || entry.path.startsWith(`${prefix}/`))
-    .slice(0, MAX_REPOSITORY_FILES);
+  const gitRuntime = await resolveGitRuntime(targets.paths);
+  const cloneUrl = createGitHubCloneUrl(source);
+  await syncGitRepository({
+    gitRuntime,
+    paths: targets.paths,
+    cloneUrl,
+    branch: source.branch,
+    targetRoot: targets.repoRoot
+  });
+
+  const sourceRoot = prefix ? path.join(targets.repoRoot, prefix) : targets.repoRoot;
+  await assertInside(targets.repoRoot, sourceRoot);
+  await assertDirectoryExists(sourceRoot, 'SUBSCRIPTION_SUBPATH_NOT_FOUND', `订阅仓库目录不存在: ${prefix || '/'}`);
+
+  const repoEntries = await listPullableRepositoryFiles({
+    sourceRoot,
+    filters: source.filters
+  });
 
   const written = [];
   for (const entry of repoEntries) {
-    const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\/+/, '') : entry.path;
-    const rawUrl = createGitHubRawUrl(source.owner, source.repo, branch, entry.path);
-    await writeRemoteFile({
-      url: rawUrl,
-      targetRoot: targets.repoRoot,
-      relativePath
+    await copySubscriptionScript({
+      sourceRoot,
+      targetRoot: targets.scriptRoot,
+      relativePath: entry.path
     });
-    if (pathShouldBePulled(relativePath, source.filters)) {
-      await copySubscriptionScript({
-        sourceRoot: targets.repoRoot,
-        targetRoot: targets.scriptRoot,
-        relativePath
-      });
-      written.push(normalizeRelativePath(relativePath));
-    }
+    written.push(normalizeRelativePath(entry.path));
   }
+
   return {
     repoPath: `data/repo/${targets.subscriptionFolder}`,
     files: written
@@ -738,6 +757,202 @@ async function resolveGitHubBranch(source) {
 
 function createGitHubRawUrl(owner, repo, branch, repoPath) {
   return `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${repoPath.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function createGitHubCloneUrl(source) {
+  return `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`;
+}
+
+async function syncGitRepository(input) {
+  await mkdir(path.dirname(input.targetRoot), { recursive: true });
+  await assertInside(path.dirname(input.targetRoot), input.targetRoot);
+
+  if (await isGitRepository(input.targetRoot)) {
+    try {
+      await updateGitRepository(input);
+      return;
+    } catch {
+      await rm(input.targetRoot, { recursive: true, force: true });
+    }
+  } else {
+    await rm(input.targetRoot, { recursive: true, force: true });
+  }
+
+  await cloneGitRepository(input);
+}
+
+async function cloneGitRepository(input) {
+  const args = ['clone', '--depth=1', '--single-branch'];
+  if (input.branch) args.push('--branch', input.branch);
+  args.push(input.cloneUrl, input.targetRoot);
+  await runGitCommand({
+    gitRuntime: input.gitRuntime,
+    paths: input.paths,
+    args,
+    cwd: path.dirname(input.targetRoot),
+    label: '克隆订阅仓库'
+  });
+}
+
+async function updateGitRepository(input) {
+  await runGitCommand({
+    gitRuntime: input.gitRuntime,
+    paths: input.paths,
+    args: ['remote', 'set-url', 'origin', input.cloneUrl],
+    cwd: input.targetRoot,
+    label: '更新订阅仓库地址'
+  });
+
+  if (input.branch) {
+    await runGitCommand({
+      gitRuntime: input.gitRuntime,
+      paths: input.paths,
+      args: ['fetch', '--depth=1', 'origin', input.branch],
+      cwd: input.targetRoot,
+      label: '拉取订阅仓库分支'
+    });
+    await runGitCommand({
+      gitRuntime: input.gitRuntime,
+      paths: input.paths,
+      args: ['checkout', '-B', input.branch, 'FETCH_HEAD'],
+      cwd: input.targetRoot,
+      label: '切换订阅仓库分支'
+    });
+    await runGitCommand({
+      gitRuntime: input.gitRuntime,
+      paths: input.paths,
+      args: ['reset', '--hard', 'FETCH_HEAD'],
+      cwd: input.targetRoot,
+      label: '重置订阅仓库'
+    });
+  } else {
+    await runGitCommand({
+      gitRuntime: input.gitRuntime,
+      paths: input.paths,
+      args: ['pull', '--ff-only', '--depth=1'],
+      cwd: input.targetRoot,
+      label: '更新订阅仓库'
+    });
+    await runGitCommand({
+      gitRuntime: input.gitRuntime,
+      paths: input.paths,
+      args: ['reset', '--hard', 'HEAD'],
+      cwd: input.targetRoot,
+      label: '重置订阅仓库'
+    });
+  }
+
+  await runGitCommand({
+    gitRuntime: input.gitRuntime,
+    paths: input.paths,
+    args: ['clean', '-ffd'],
+    cwd: input.targetRoot,
+    label: '清理订阅仓库'
+  });
+}
+
+async function isGitRepository(targetRoot) {
+  try {
+    await access(path.join(targetRoot, '.git'), constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runGitCommand(input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(input.gitRuntime.gitPath, input.args, {
+      cwd: input.cwd,
+      windowsHide: true,
+      env: createGitProcessEnv(input.paths, input.gitRuntime)
+    });
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+
+    child.on('error', (error) => {
+      reject(new AppError('GIT_COMMAND_SPAWN_FAILED', `${input.label}启动失败: ${error.message}`, {
+        gitPath: input.gitRuntime.gitPath,
+        args: input.args,
+        code: error.code
+      }));
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new AppError('GIT_COMMAND_FAILED', `${input.label}失败: ${stderr || stdout || `退出码 ${code}`}`, {
+        gitPath: input.gitRuntime.gitPath,
+        args: input.args,
+        exitCode: code,
+        stdout,
+        stderr
+      }));
+    });
+  });
+}
+
+function createGitProcessEnv(paths, gitRuntime) {
+  const env = createPortableProcessEnv(paths, {
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: path.join(paths.dataRoot, 'configs', '.gitconfig'),
+    GCM_INTERACTIVE: 'never',
+    GIT_ASKPASS: 'echo'
+  });
+  const pathParts = [];
+  if (gitRuntime.gitRoot) {
+    pathParts.push(
+      path.join(gitRuntime.gitRoot, 'cmd'),
+      path.join(gitRuntime.gitRoot, 'mingw64', 'bin'),
+      path.join(gitRuntime.gitRoot, 'usr', 'bin')
+    );
+  }
+  pathParts.push(env.Path || env.PATH || '');
+  return {
+    ...env,
+    PATH: pathParts.filter(Boolean).join(path.delimiter),
+    Path: pathParts.filter(Boolean).join(path.delimiter)
+  };
+}
+
+async function assertDirectoryExists(directoryPath, code, message) {
+  try {
+    const directoryStat = await stat(directoryPath);
+    if (!directoryStat.isDirectory()) throw new Error('not directory');
+  } catch {
+    throw new AppError(code, message, { path: directoryPath });
+  }
+}
+
+async function listPullableRepositoryFiles(input, current = input.sourceRoot, items = []) {
+  if (items.length >= MAX_REPOSITORY_FILES) return items;
+  const entries = await readdir(current, { withFileTypes: true });
+  for (const entry of entries) {
+    if (items.length >= MAX_REPOSITORY_FILES) break;
+    if (entry.name === '.git') continue;
+
+    const fullPath = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      await listPullableRepositoryFiles(input, fullPath, items);
+    } else if (entry.isFile()) {
+      const relativePath = path.relative(input.sourceRoot, fullPath).replaceAll(path.sep, '/');
+      if (pathShouldBePulled(relativePath, input.filters)) {
+        items.push({ path: relativePath });
+      }
+    }
+  }
+  return items;
 }
 
 function pathShouldBePulled(value, filters = {}) {

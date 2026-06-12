@@ -21,3 +21,7 @@ await fs.rm(appRuntime, { recursive: true, force: true });
 const nodePath = path.join(target, 'node', 'active', process.platform === 'win32' ? 'node.exe' : 'node');
 await fs.access(nodePath);
 console.log(`Portable runtime ready: ${nodePath}`);
+
+const gitPath = path.join(target, 'git', 'active', 'cmd', process.platform === 'win32' ? 'git.exe' : 'git');
+await fs.access(gitPath);
+console.log(`Portable git ready: ${gitPath}`);
