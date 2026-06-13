@@ -32,7 +32,7 @@ await check('JS 语法检查覆盖关键入口', async () => {
     'src/main/modules/tasks/application/commands/create-task.handler.js',
     'src/main/modules/tasks/application/commands/update-task.handler.js',
     'src/main/modules/settings/infrastructure/json-settings-repository.js',
-    'src/main/modules/qinglong/infrastructure/local-qinglong-service.js',
+    'src/main/modules/workspace/infrastructure/local-workspace-service.js',
     'src/main/modules/updates/infrastructure/github-update-service.js',
     'tools/human-acceptance.mjs',
     'tools/quality-check.mjs'

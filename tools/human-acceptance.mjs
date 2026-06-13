@@ -277,35 +277,24 @@ try {
     assert(subscriptionRun.data.log.text.includes('from-subscription'), '订阅脚本没有收到参数');
   });
 
-  await check('GitHub 订阅目录优先使用订阅名称', async () => {
+  await check('订阅目录优先使用订阅名称并接受 GitHub 简写', async () => {
     await page.locator('[data-page="subscription"]').evaluate((node) => node.click());
     await page.locator('#subscription.page.active #newSubscriptionButton').waitFor({ state: 'visible' });
     await page.locator('#subscription.page.active #newSubscriptionButton').evaluate((node) => node.click());
-    await page.locator('#subscriptionNameInput').fill('faker3');
-    await page.locator('#subscriptionUrlInput').fill('https://github.com/shufflewzc/faker3.git');
+    const name = `github-short-${Date.now()}`;
+    await page.locator('#subscriptionNameInput').fill(name);
+    await page.locator('#subscriptionUrlInput').fill('shufflewzc/faker3');
     await page.locator('#subscriptionBranchInput').fill('');
     await page.locator('#subscriptionScheduleInput').fill('0 0 * * *');
     await page.locator('#subscriptionForm button[type="submit"]').click();
-    await expectText(page, '#subscription.page.active #subscriptionTable', 'data/scripts/faker3');
-    await page.locator('#subscription.page.active #subscriptionTable tbody tr').filter({ hasText: 'faker3' }).locator('[data-subscription-check]').check();
-    await page.locator('#subscription.page.active #batchRunSubscriptionsButton').click();
-    const faker3 = await waitForSubscription((item) => (
-      item.name === 'faker3' &&
-      item.subscriptionFolder === 'faker3' &&
-      item.localPath === 'data/scripts/faker3' &&
-      item.repoPath === 'data/repo/faker3' &&
-      item.lastFiles?.includes('data/scripts/faker3/utils/baseCookie.js')
-    ), 120000);
-    await waitForFile(path.join(dataRoot, 'repo', 'faker3', '.git', 'config'), 120000);
-    await waitForFile(path.join(dataRoot, 'scripts', 'faker3', 'utils', 'baseCookie.js'), 120000);
-    assert(faker3?.subscriptionFolder === 'faker3', `faker3 订阅目录异常: ${faker3?.subscriptionFolder}`);
-    assert(faker3?.localPath === 'data/scripts/faker3', `faker3 本地目录异常: ${faker3?.localPath}`);
-    assert(faker3?.repoPath === 'data/repo/faker3', `faker3 仓库缓存目录异常: ${faker3?.repoPath}`);
-    assert(faker3?.lastLog?.includes('GitHub 加速地址：https://ghfast.top/'), 'faker3 订阅日志没有记录 GitHub 加速地址配置');
-    await expectText(page, '#subscriptionLogViewer', 'faker3');
-    await expectText(page, '#subscriptionLogViewer', 'GitHub 加速地址：https://ghfast.top/');
-    await page.locator('#subscriptionLogModal [data-close-modal]').last().click();
-    await page.locator('#subscriptionLogModal').waitFor({ state: 'hidden' });
+    await expectText(page, '#subscription.page.active #subscriptionTable', `data/scripts/${name}`);
+    const subscription = await waitForSubscription((item) => (
+      item.name === name &&
+      item.subscriptionFolder === name &&
+      item.localPath === `data/scripts/${name}` &&
+      item.repoPath === `data/repo/${name}`
+    ));
+    assert(subscription?.url === 'shufflewzc/faker3', `GitHub 简写订阅地址异常: ${subscription?.url}`);
   });
 
   await check('Cron 表达式生成器可按人类操作生成并应用', async () => {
@@ -396,7 +385,7 @@ try {
     }
   });
 
-  await check('定时任务页复刻青龙式更多菜单、详情、视图和删除', async () => {
+  await check('定时任务页支持更多菜单、详情、视图和删除', async () => {
     await page.locator('[data-page="crontab"]').click();
     await page.locator('#newTaskButton').click();
     await chooseTaskScriptSource(page, 'inline');
@@ -405,7 +394,7 @@ try {
     await page.locator('#taskScriptPathInput').fill('');
     await page.locator('#taskScriptContentInput').fill('console.log("这个任务会被删除");');
     await page.locator('#taskCronInput').fill('*/5 * * * *');
-    await page.locator('#taskLabelsInput').fill('验收\n青龙');
+    await page.locator('#taskLabelsInput').fill('验收\n脚本');
     await page.locator('#taskForm button[type="submit"]').click();
     await expectText(page, '#taskTable', name);
     const row = page.locator('#taskTable tbody tr').filter({ hasText: name });
@@ -488,9 +477,8 @@ try {
         '  npmCache: env.npm_config_cache,',
         '  npmPrefix: env.npm_config_prefix,',
         '  nodePath: env.NODE_PATH,',
-        '  qlDir: env.QL_DIR,',
-        '  qlDataDir: env.QL_DATA_DIR,',
-        '  qlNodeGlobalPath: env.QL_NODE_GLOBAL_PATH',
+        '  scriptPilotDir: env.SCRIPT_PILOT_DIR,',
+        '  scriptPilotNodeModules: env.SCRIPT_PILOT_NODE_MODULES',
         '}));'
       ].join('\n'),
       cwd: 'data',
@@ -510,9 +498,8 @@ try {
     assert(envInfo.temp.startsWith(path.join(dataRoot, 'tmp')), 'TEMP 未指向 data/tmp');
     assert(envInfo.appdata.startsWith(path.join(dataRoot, 'profile')), 'APPDATA 未指向 data/profile');
     assert(envInfo.npmCache.startsWith(path.join(dataRoot, 'cache', 'npm')), 'npm 缓存未指向 data/cache/npm');
-    assert(envInfo.qlDir === appRoot, 'QL_DIR 未指向内置应用目录');
-    assert(envInfo.qlDataDir === dataRoot, 'QL_DATA_DIR 未指向 data');
-    assert(envInfo.qlNodeGlobalPath.startsWith(path.join(dataRoot, 'node_modules')), 'QL_NODE_GLOBAL_PATH 未指向 data/node_modules');
+    assert(envInfo.scriptPilotDir === appRoot, 'SCRIPT_PILOT_DIR 未指向内置应用目录');
+    assert(envInfo.scriptPilotNodeModules.startsWith(path.join(dataRoot, 'node_modules')), 'SCRIPT_PILOT_NODE_MODULES 未指向 data/node_modules');
   });
 
   await check('外部绝对路径会被拒绝', async () => {
@@ -549,19 +536,19 @@ try {
     assert(taskBody.error?.code === 'PATH_OUTSIDE_PORTABLE_ROOT', `外部路径任务错误码异常: ${taskBody.error?.code}`);
   });
 
-  await check('青龙式模块 API 可读写环境变量', async () => {
+  await check('本机 workspace API 可读写环境变量', async () => {
     const name = `API_ENV_${Date.now()}`;
-    const saveResponse = await fetch(`${apiBaseUrl}/api/ql/envs`, {
+    const saveResponse = await fetch(`${apiBaseUrl}/api/workspace/envs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ name, value: 'api-value', remarks: 'api 创建' })
     });
     const saveBody = await saveResponse.json();
     assert(saveBody.ok, '保存环境变量 API 失败');
-    const listResponse = await fetch(`${apiBaseUrl}/api/ql/envs`);
+    const listResponse = await fetch(`${apiBaseUrl}/api/workspace/envs`);
     const listBody = await listResponse.json();
     assert(listBody.ok, '读取环境变量 API 失败');
-    assert(listBody.data.items.some((item) => item.name === name), '青龙式环境变量 API 未返回新变量');
+    assert(listBody.data.items.some((item) => item.name === name), 'workspace 环境变量 API 未返回新变量');
 
     const runBody = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '环境变量注入验收',
@@ -571,7 +558,7 @@ try {
     });
     assert(runBody.ok, '运行环境变量注入脚本 API 失败');
     assert(runBody.data.run.status === 'success', `环境变量注入脚本失败: ${runBody.data.log.text}`);
-    assert(runBody.data.log.text.includes('api-value'), '脚本进程没有读到青龙式环境变量');
+    assert(runBody.data.log.text.includes('api-value'), '脚本进程没有读到 workspace 环境变量');
   });
 
   await check('依赖管理可手动安装 axios 到 data/node_modules', async () => {

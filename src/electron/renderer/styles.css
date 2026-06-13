@@ -543,11 +543,11 @@ pre,
   opacity: 0.72;
 }
 
-.ql-cron-table .tag + .tag {
+.task-table .tag + .tag {
   margin-left: 4px;
 }
 
-.ql-cron-table {
+.task-table {
   min-width: 1420px;
 }
 

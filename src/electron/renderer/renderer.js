@@ -4,7 +4,7 @@ const TASK_SORT_FALLBACK = { field: 'pinned', direction: 'DESC' };
 const TASK_SORTABLE_FIELDS = new Set(['name', 'cronExpression', 'lastDuration', 'lastStartedAt', 'nextRunAt', 'pinned']);
 
 const pageMeta = {
-  crontab: ['定时任务', '青龙式任务表格，支持批量运行、启停、删除和查看日志。'],
+  crontab: ['定时任务', '集中管理脚本任务，支持批量运行、启停、删除和查看日志。'],
   subscription: ['订阅管理', '拉取 GitHub 仓库、GitHub Raw 或普通 HTTP 脚本到本地 data/scripts，并查看订阅运行日志。'],
   env: ['环境变量', '保存脚本运行所需变量，支持批量启用、禁用和删除。'],
   config: ['配置文件', '编辑 data/configs 下的配置文件，所有内容留在安装目录。'],
@@ -330,7 +330,7 @@ async function init() {
 async function refreshAll() {
   await Promise.all([
     refreshTasksAndRuns(),
-    refreshQinglongData()
+    refreshWorkspaceData()
   ]);
   renderAll();
 }
@@ -349,9 +349,9 @@ async function refreshTasksOnly() {
   state.tasks = tasks.items || [];
 }
 
-async function refreshQinglongData() {
+async function refreshWorkspaceData() {
   const [overview, envs, configs, scripts, subscriptions, dependencies] = await Promise.all([
-    api.qlOverview(),
+    api.getWorkspaceOverview(),
     api.listEnvs(),
     api.listConfigs(),
     api.listScripts(),
@@ -485,7 +485,7 @@ function renderTasks() {
   }
 
   setHtml(els.taskTable, `
-    <table class="data-table ql-cron-table">
+    <table class="data-table task-table">
       <thead>
         <tr>
           <th class="check-col"><input id="selectAllTasksInput" type="checkbox" ${allSelected ? 'checked' : ''}></th>
@@ -2455,8 +2455,8 @@ async function refreshSubscriptions() {
   renderSubscriptions();
 }
 
-async function refreshQinglongOverview() {
-  state.overview = await api.qlOverview();
+async function refreshWorkspaceOverview() {
+  state.overview = await api.getWorkspaceOverview();
   renderMetrics();
 }
 
@@ -2480,7 +2480,7 @@ async function handleSubscriptionSubmit(event) {
     const saved = await api.saveSubscription(input);
     upsertSubscription(saved);
     els.subscriptionModal.close();
-    await refreshQinglongOverview();
+    await refreshWorkspaceOverview();
     toast('订阅已保存');
   } catch (error) {
     toast(formatError(error));
@@ -2491,7 +2491,7 @@ function readSubscriptionForm() {
   const name = readRequiredValue('subscriptionNameInput', '订阅名称');
   const url = readRequiredValue('subscriptionUrlInput', '订阅地址');
   if (!looksLikeSubscriptionInput(url)) {
-    throw new Error('订阅地址格式不正确，请填写 GitHub 仓库、GitHub Raw、HTTP 文件、ql repo 或 ql raw');
+    throw new Error('订阅地址格式不正确，请填写 GitHub 仓库、GitHub Raw、HTTP 文件或 owner/repo');
   }
   const schedule = readValue('subscriptionScheduleInput');
   if (schedule) assertValidCronExpression(schedule, '订阅 Cron 表达式');
@@ -2509,8 +2509,7 @@ function readSubscriptionForm() {
 
 function looksLikeSubscriptionInput(value) {
   const text = String(value || '').trim();
-  return /^ql\s+(repo|raw)\s+/i.test(text) ||
-    /^https?:\/\//i.test(text) ||
+  return /^https?:\/\//i.test(text) ||
     /^git@github\.com:/i.test(text) ||
     /^ssh:\/\/git@github\.com\//i.test(text) ||
     /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?$/i.test(text);
@@ -2565,7 +2564,7 @@ async function runSubscription(id) {
 
     await Promise.all([
       refreshScripts(),
-      refreshQinglongOverview()
+      refreshWorkspaceOverview()
     ]);
     const message = formatSubscriptionRunSuccess(result, name);
     setSubscriptionRunStatus(message, 'success');
@@ -2628,7 +2627,7 @@ async function batchRunSubscriptions() {
     await Promise.all([
       refreshSubscriptions(),
       refreshScripts(),
-      refreshQinglongOverview()
+      refreshWorkspaceOverview()
     ]);
     const message = `订阅运行失败：${formatError(error)}`;
     setSubscriptionRunStatus(message, 'error');
@@ -2784,7 +2783,7 @@ async function batchDeleteSubscriptions() {
   await Promise.all([
     refreshSubscriptions(),
     refreshScripts(),
-    refreshQinglongOverview()
+    refreshWorkspaceOverview()
   ]);
   toast(`已删除 ${ids.length} 个订阅`);
 }
@@ -3443,7 +3442,7 @@ async function renderRunLog(runId, options = {}) {
     if (run.status !== 'running') {
       const refreshes = [refreshTasksAndRuns()];
       if (run.trigger === 'subscription') {
-        refreshes.push(refreshSubscriptions(), refreshScripts(), refreshQinglongOverview());
+        refreshes.push(refreshSubscriptions(), refreshScripts(), refreshWorkspaceOverview());
       }
       await Promise.all(refreshes);
       renderMetrics();
@@ -3966,7 +3965,7 @@ async function refreshAfterSubscriptionRun(runId) {
     await Promise.all([
       refreshSubscriptions(),
       refreshScripts(),
-      refreshQinglongOverview(),
+      refreshWorkspaceOverview(),
       refreshTasksAndRuns()
     ]);
     if (runId) state.completedSubscriptionRunRefreshIds.add(runId);

@@ -37,7 +37,7 @@
         <header class="topbar">
           <div>
             <h1 id="pageTitle">定时任务</h1>
-            <p id="pageSubtitle">青龙式任务表格，支持批量运行、启停、删除和查看日志。</p>
+            <p id="pageSubtitle">集中管理脚本任务，支持批量运行、启停、删除和查看日志。</p>
           </div>
           <div class="top-actions">
             <button class="ghost" id="refreshAllButton" type="button">刷新</button>
@@ -307,7 +307,7 @@
                 <label><span>主题</span><select id="themeSelect"><option value="light">亮色</option><option value="dark">暗色</option></select></label>
                 <label><span>密度</span><select id="densitySelect"><option value="comfortable">标准</option><option value="compact">紧凑</option><option value="spacious">宽松</option></select></label>
                 <label><span>字体</span><select id="fontFamilySelect"><option value="Microsoft YaHei UI">微软雅黑 UI</option><option value="DengXian">等线</option><option value="Microsoft JhengHei UI">正黑 UI</option><option value="Noto Sans SC">思源黑体</option></select></label>
-                <label><span>强调色</span><select id="accentSelect"><option value="emerald">青龙绿</option><option value="blue">科技蓝</option><option value="orange">暖橙</option><option value="slate">石板灰</option></select></label>
+                <label><span>强调色</span><select id="accentSelect"><option value="emerald">清新绿</option><option value="blue">科技蓝</option><option value="orange">暖橙</option><option value="slate">石板灰</option></select></label>
                 <label><span>字号 <b id="fontScaleValue">100%</b></span><input id="fontScaleInput" type="range" min="90" max="120" value="100" /></label>
                 <label><span>圆角 <b id="radiusValue">18</b></span><input id="radiusInput" type="range" min="10" max="28" value="18" /></label>
               </div>
@@ -611,7 +611,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
         </div>
         <input id="subscriptionIdInput" type="hidden" />
         <label><span>订阅名称</span><input id="subscriptionNameInput" required /></label>
-        <label><span>订阅地址</span><input id="subscriptionUrlInput" placeholder="支持 https://github.com/owner/repo.git、owner/repo.git、git@github.com:owner/repo.git、ql repo/raw ..." /></label>
+        <label><span>订阅地址</span><input id="subscriptionUrlInput" placeholder="支持 https://github.com/owner/repo.git、owner/repo.git、git@github.com:owner/repo.git、Raw 或普通 HTTP 文件" /></label>
         <label><span>分支</span><input id="subscriptionBranchInput" placeholder="main，GitHub tree/raw 地址可留空" /></label>
         <label><span>Cron 表达式</span><input id="subscriptionScheduleInput" placeholder="0 0 * * *" /></label>
         <label><span>状态</span><select id="subscriptionStatusInput"><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>

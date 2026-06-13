@@ -68,21 +68,21 @@ async function routeRequest(coreApp, request, url) {
         'GET /api/runs/:id',
         'GET /api/runs/:id/log',
         'POST /api/logs/cleanup',
-        'GET /api/ql/overview',
-        'GET /api/ql/envs',
-        'POST /api/ql/envs',
-        'PATCH /api/ql/envs/status',
-        'DELETE /api/ql/envs',
-        'GET /api/ql/configs',
-        'GET /api/ql/scripts',
-        'POST /api/ql/scripts',
-        'POST /api/ql/scripts/run',
-        'GET /api/ql/subscriptions',
-        'POST /api/ql/subscriptions',
-        'POST /api/ql/subscriptions/:id/run',
-        'GET /api/ql/dependencies',
-        'POST /api/ql/dependencies',
-        'DELETE /api/ql/dependencies',
+        'GET /api/workspace/overview',
+        'GET /api/workspace/envs',
+        'POST /api/workspace/envs',
+        'PATCH /api/workspace/envs/status',
+        'DELETE /api/workspace/envs',
+        'GET /api/workspace/configs',
+        'GET /api/workspace/scripts',
+        'POST /api/workspace/scripts',
+        'POST /api/workspace/scripts/run',
+        'GET /api/workspace/subscriptions',
+        'POST /api/workspace/subscriptions',
+        'POST /api/workspace/subscriptions/:id/run',
+        'GET /api/workspace/dependencies',
+        'POST /api/workspace/dependencies',
+        'DELETE /api/workspace/dependencies',
         'GET /api/startup',
         'POST /api/startup/enable',
         'POST /api/startup/disable'
@@ -235,17 +235,17 @@ async function routeRequest(coreApp, request, url) {
     return disableStartupTask();
   }
 
-  const qlResult = await routeQinglongRequest(coreApp, request, url);
-  if (qlResult.handled) return qlResult.data;
+  const workspaceResult = await routeWorkspaceRequest(coreApp, request, url);
+  if (workspaceResult.handled) return workspaceResult.data;
 
   const notFound = new Error(`接口不存在: ${request.method} ${url.pathname}`);
   notFound.statusCode = 404;
   throw notFound;
 }
 
-async function routeQinglongRequest(coreApp, request, url) {
-  const service = coreApp.services.qinglongService;
-  const pathname = normalizeQinglongPath(url.pathname);
+async function routeWorkspaceRequest(coreApp, request, url) {
+  const service = coreApp.services.workspaceService;
+  const pathname = normalizeWorkspacePath(url.pathname);
 
   if (request.method === 'GET' && pathname === '/overview') {
     return handled(await service.getOverview());
@@ -353,8 +353,8 @@ async function runScriptAndReadResult(coreApp, input) {
   return { run, log };
 }
 
-function normalizeQinglongPath(pathname) {
-  if (pathname.startsWith('/api/ql')) return pathname.slice('/api/ql'.length) || '/';
+function normalizeWorkspacePath(pathname) {
+  if (pathname.startsWith('/api/workspace')) return pathname.slice('/api/workspace'.length) || '/';
   const aliases = ['/overview', '/envs', '/configs', '/scripts', '/subscriptions', '/dependencies'];
   for (const alias of aliases) {
     if (pathname === `/api${alias}` || pathname.startsWith(`/api${alias}/`)) {

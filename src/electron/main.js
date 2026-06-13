@@ -170,25 +170,25 @@ function registerIpc() {
   ipcMain.handle('settings:get', async () => safeInvoke(() => coreApp.repositories.settingsRepository.get()));
   ipcMain.handle('settings:save', async (_event, input) => safeInvoke(() => coreApp.repositories.settingsRepository.save(input)));
   ipcMain.handle('logs:cleanup-now', async () => safeInvoke(() => coreApp.services.logCleanupService.cleanNow()));
-  ipcMain.handle('ql:overview', async () => safeInvoke(() => coreApp.services.qinglongService.getOverview()));
-  ipcMain.handle('ql:env:list', async () => safeInvoke(() => coreApp.services.qinglongService.listEnvs()));
-  ipcMain.handle('ql:env:save', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.saveEnv(input)));
-  ipcMain.handle('ql:env:delete', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.deleteEnvs(input?.ids || [])));
-  ipcMain.handle('ql:env:set-status', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.setEnvStatus(input?.ids || [], input?.status)));
-  ipcMain.handle('ql:config:list', async () => safeInvoke(() => coreApp.services.qinglongService.listConfigs()));
-  ipcMain.handle('ql:config:get', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.getConfig(input?.name)));
-  ipcMain.handle('ql:config:save', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.saveConfig(input)));
-  ipcMain.handle('ql:script:list', async () => safeInvoke(() => coreApp.services.qinglongService.listScripts()));
-  ipcMain.handle('ql:script:get', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.getScript(input?.path)));
-  ipcMain.handle('ql:script:save', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.saveScript(input)));
-  ipcMain.handle('ql:script:delete', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.deleteScripts(input?.paths || [])));
-  ipcMain.handle('ql:subscription:list', async () => safeInvoke(() => coreApp.services.qinglongService.listSubscriptions()));
-  ipcMain.handle('ql:subscription:save', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.saveSubscription(input)));
-  ipcMain.handle('ql:subscription:delete', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.deleteSubscriptions(input?.ids || [])));
-  ipcMain.handle('ql:subscription:run', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.runSubscription(input?.id, input || {})));
-  ipcMain.handle('ql:dependency:list', async () => safeInvoke(() => coreApp.services.qinglongService.listDependencies()));
-  ipcMain.handle('ql:dependency:install', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.installDependency(input?.name)));
-  ipcMain.handle('ql:dependency:remove', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.removeDependency(input?.name)));
+  ipcMain.handle('workspace:overview', async () => safeInvoke(() => coreApp.services.workspaceService.getOverview()));
+  ipcMain.handle('workspace:env:list', async () => safeInvoke(() => coreApp.services.workspaceService.listEnvs()));
+  ipcMain.handle('workspace:env:save', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.saveEnv(input)));
+  ipcMain.handle('workspace:env:delete', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.deleteEnvs(input?.ids || [])));
+  ipcMain.handle('workspace:env:set-status', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.setEnvStatus(input?.ids || [], input?.status)));
+  ipcMain.handle('workspace:config:list', async () => safeInvoke(() => coreApp.services.workspaceService.listConfigs()));
+  ipcMain.handle('workspace:config:get', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.getConfig(input?.name)));
+  ipcMain.handle('workspace:config:save', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.saveConfig(input)));
+  ipcMain.handle('workspace:script:list', async () => safeInvoke(() => coreApp.services.workspaceService.listScripts()));
+  ipcMain.handle('workspace:script:get', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.getScript(input?.path)));
+  ipcMain.handle('workspace:script:save', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.saveScript(input)));
+  ipcMain.handle('workspace:script:delete', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.deleteScripts(input?.paths || [])));
+  ipcMain.handle('workspace:subscription:list', async () => safeInvoke(() => coreApp.services.workspaceService.listSubscriptions()));
+  ipcMain.handle('workspace:subscription:save', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.saveSubscription(input)));
+  ipcMain.handle('workspace:subscription:delete', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.deleteSubscriptions(input?.ids || [])));
+  ipcMain.handle('workspace:subscription:run', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.runSubscription(input?.id, input || {})));
+  ipcMain.handle('workspace:dependency:list', async () => safeInvoke(() => coreApp.services.workspaceService.listDependencies()));
+  ipcMain.handle('workspace:dependency:install', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.installDependency(input?.name)));
+  ipcMain.handle('workspace:dependency:remove', async (_event, input) => safeInvoke(() => coreApp.services.workspaceService.removeDependency(input?.name)));
 }
 
 async function runScriptAndReadResult(input) {

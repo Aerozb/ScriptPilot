@@ -4,7 +4,7 @@
 
 - ScriptPilot 是本机使用的 Windows 绿色便携版 Electron 应用。
 - 不做账号体系、角色体系或公网服务。
-- 目标体验参考青龙面板，但数据和运行时留在本机目录。
+- 目标体验是本机绿色、清晰高效的脚本调度器，数据和运行时留在本机目录。
 
 ## 数据目录
 
@@ -30,7 +30,7 @@ src/main/app/             应用装配
 src/main/shared/          CommandBus、QueryBus、错误和通用基础设施
 src/main/modules/tasks/   任务聚合、命令、查询、JSON repository
 src/main/modules/runs/    运行记录、脚本执行、日志读取
-src/main/modules/qinglong/ 环境、配置、脚本、订阅、依赖服务
+src/main/modules/workspace/ 环境、配置、脚本、订阅、依赖服务
 ```
 
 Renderer 是普通 HTML/CSS/JS，不使用 React。后端是 ESM Node 模块。
@@ -86,7 +86,7 @@ Renderer 是普通 HTML/CSS/JS，不使用 React。后端是 ESM Node 模块。
 
 ## 订阅
 
-- 支持 GitHub 仓库、GitHub Raw、普通 HTTP、`ql repo`、`ql raw`。
+- 支持 GitHub 仓库、GitHub Raw、普通 HTTP 和 `owner/repo` 简写。
 - 订阅名称优先作为本地脚本目录名。
 - 自动建任务只基于明确可解析的 cron 声明，不猜测。
 - 自动建任务名称优先取脚本中的 `new Env('任务名')`，其次取 cron 注释 tag，最后取脚本文件名。

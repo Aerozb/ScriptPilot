@@ -1,6 +1,6 @@
 ---
 name: scriptpilot-maintenance
-description: Maintain ScriptPilot, a Windows portable Electron NodeJS script scheduler. Use when changing ScriptPilot code, UI behavior, QingLong-style subscriptions/logs/tasks, local API behavior, portable data paths, build/release artifacts, GitHub Release packaging, or repository documentation and AI instructions.
+description: Maintain ScriptPilot, a Windows portable Electron NodeJS script scheduler. Use when changing ScriptPilot code, UI behavior, subscriptions/logs/tasks, local API behavior, portable data paths, build/release artifacts, GitHub Release packaging, or repository documentation and AI instructions.
 ---
 
 # ScriptPilot Maintenance

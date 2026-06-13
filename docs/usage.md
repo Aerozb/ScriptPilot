@@ -273,8 +273,6 @@ owner/repo
 owner/repo.git
 https://raw.githubusercontent.com/owner/repo/branch/path/file.js
 https://example.com/file.js
-ql repo https://github.com/owner/repo.git "xxx" "yyy"
-ql raw https://example.com/file.js
 ```
 
 新建订阅步骤：
@@ -342,10 +340,10 @@ app/data/scripts/订阅名称/
 任务名称会优先读取脚本里的：
 
 ```js
-const $ = new Env('青龙路飞账密更新工具');
+const $ = new Env('示例任务名称');
 ```
 
-这个例子会创建名为“青龙路飞账密更新工具”的任务。
+这个例子会创建名为“示例任务名称”的任务。
 
 如果脚本没有 `new Env('任务名')`，会按脚本文件名生成任务名。
 
@@ -375,7 +373,7 @@ const $ = new Env('青龙路飞账密更新工具');
 
 脚本运行时，会自动读取启用状态的环境变量。
 
-如果有多个同名变量，运行时会用 `&` 拼接，方便兼容一些青龙脚本习惯。
+如果有多个同名变量，运行时会用 `&` 拼接，方便脚本一次读取多份同类配置。
 
 输入校验：
 
@@ -540,7 +538,7 @@ Windows 可能缓存了旧图标。可以尝试重新解压、删除旧快捷方
 只有脚本里写了类似下面的代码，才会优先使用中文名：
 
 ```js
-const $ = new Env('青龙路飞账密更新工具');
+const $ = new Env('示例任务名称');
 ```
 
 如果没有这行，会按脚本文件名生成任务名。

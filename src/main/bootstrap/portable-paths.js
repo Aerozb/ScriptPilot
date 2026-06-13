@@ -15,13 +15,13 @@ const DATA_README = `# ScriptPilot data 目录说明
 | scripts/ | 用户脚本、任务脚本和订阅拉取后可执行的脚本。 | 不建议删除，除非确认脚本不再需要。 |
 | scripts/tasks/ | 从定时任务弹窗里直接填写内容时自动保存的脚本。 | 不建议删除，对应任务会找不到脚本。 |
 | scripts/api/ | 通过本机 API 传入 scriptContent 时临时落盘的脚本。 | 可按需清理历史接口脚本。 |
-| repo/ | 按青龙 ql repo 方式保存订阅仓库原始文件，目录名为 作者_仓库[_分支]。 | 可清理，之后重新运行订阅会再次拉取。 |
-| raw/ | 按青龙 ql raw 方式保存单文件订阅的原始文件。 | 可清理，之后重新运行订阅会再次下载。 |
+| repo/ | 保存 Git 仓库订阅的原始文件缓存。 | 可清理，之后重新运行订阅会再次拉取。 |
+| raw/ | 保存单文件订阅的原始文件缓存。 | 可清理，之后重新运行订阅会再次下载。 |
 | logs/ | 运行日志和应用日志总目录。 | 可清理旧日志。 |
 | logs/tasks/ | 定时任务、手动运行、API 运行产生的 stdout/stderr 日志。 | 可清理旧日志，但日志管理里将无法查看。默认会定期清理超过 30 天的运行日志。 |
 | logs/app/ | Electron 应用日志。 | 可清理旧日志。 |
 | state/ | 任务、运行记录、设置、环境变量、订阅和依赖历史等 JSON 数据。 | 不建议删除，会重置业务数据。 |
-| state/settings.json | 外观、分页、视图等设置。默认亮色青龙绿。 | 删除后会恢复默认设置。 |
+| state/settings.json | 外观、分页、视图等设置。默认亮色清新绿。 | 删除后会恢复默认设置。 |
 | state/tasks.json | 定时任务列表。 | 删除后任务会丢失。 |
 | state/runs.json | 运行记录索引。 | 删除后日志列表会丢失历史记录。 |
 | state/log-cleanup-state.json | 最近一次日志清理结果，包括清理时间、截止时间、删除数量。 | 可清理，下次清理会重新生成。 |
@@ -166,9 +166,8 @@ export function createPortableProcessEnv(paths, extraEnv = {}, baseEnv = process
     APPDATA: paths.appDataRoot,
     LOCALAPPDATA: paths.localAppDataRoot,
     XDG_CACHE_HOME: cacheXdgRoot,
-    QL_DIR: paths.portableRoot,
-    QL_DATA_DIR: paths.dataRoot,
-    QL_NODE_GLOBAL_PATH: path.join(paths.dataRoot, 'node_modules'),
+    SCRIPT_PILOT_DIR: paths.portableRoot,
+    SCRIPT_PILOT_NODE_MODULES: path.join(paths.dataRoot, 'node_modules'),
     npm_config_cache: cacheNpmRoot,
     npm_config_prefix: paths.dataRoot,
     npm_config_userconfig: npmUserConfigPath,

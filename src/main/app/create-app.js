@@ -38,7 +38,7 @@ import { StopTaskRunHandler } from '../modules/runs/application/commands/stop-ta
 import { ensureScriptDependencies } from '../modules/dependencies/infrastructure/script-dependency-manager.js';
 import { TaskScheduler } from '../modules/scheduler/infrastructure/task-scheduler.js';
 import { JsonSettingsRepository } from '../modules/settings/infrastructure/json-settings-repository.js';
-import { LocalQinglongService } from '../modules/qinglong/infrastructure/local-qinglong-service.js';
+import { LocalWorkspaceService } from '../modules/workspace/infrastructure/local-workspace-service.js';
 import { LogCleanupService } from '../modules/logs/infrastructure/log-cleanup-service.js';
 
 export async function createApp(options = {}) {
@@ -48,7 +48,7 @@ export async function createApp(options = {}) {
   const taskRepository = new JsonTaskRepository(paths.tasksJson);
   const runRepository = new JsonRunRepository(paths.runsJson);
   const settingsRepository = new JsonSettingsRepository(paths.settingsJson);
-  const qinglongService = new LocalQinglongService(paths, {
+  const workspaceService = new LocalWorkspaceService(paths, {
     runRepository,
     taskRepository,
     settingsRepository
@@ -117,7 +117,7 @@ export async function createApp(options = {}) {
       settingsRepository
     },
     services: {
-      qinglongService,
+      workspaceService,
       logCleanupService
     }
   };

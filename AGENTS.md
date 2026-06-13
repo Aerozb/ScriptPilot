@@ -61,7 +61,7 @@
 - 本机 API：`src/electron/api-server.js`
 - 任务：`src/main/modules/tasks/`
 - 运行和日志：`src/main/modules/runs/`
-- 青龙式脚本、订阅、环境、配置：`src/main/modules/qinglong/`
+- 本地脚本、订阅、环境、配置：`src/main/modules/workspace/`
 - 绿色路径：`src/main/bootstrap/portable-paths.js`
 - 构建/产物：`package.json`、`tools/create-portable-layout.mjs`、`tools/fix-portable-runtime.mjs`
 

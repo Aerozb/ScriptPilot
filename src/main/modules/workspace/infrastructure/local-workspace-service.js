@@ -15,7 +15,7 @@ import { Task } from '../../tasks/domain/task.aggregate.js';
 import { assertValidCronExpression } from '../../scheduler/infrastructure/cron-expression.js';
 
 const DEFAULT_CONFIGS = {
-  'config.sh': '# ScriptPilot 本地青龙版配置\nexport QL_DIR=\"$PWD\"\n',
+  'config.sh': '# ScriptPilot 本地脚本配置\nexport SCRIPT_PILOT_DIR=\"$PWD\"\n',
   'notify.js': 'module.exports = async function notify(title, content) {\n  console.log(`[notify] ${title}: ${content}`);\n};\n',
   'extra.sh': '# 自定义 Shell 配置\n',
   'package.json': '{\n  "dependencies": {}\n}\n'
@@ -28,7 +28,7 @@ const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
 const MAX_REPOSITORY_FILES = 5000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
 
-export class LocalQinglongService {
+export class LocalWorkspaceService {
   constructor(paths, deps = {}) {
     this.paths = paths;
     this.runRepository = deps.runRepository;
@@ -624,7 +624,7 @@ async function pullSubscriptionFiles(input) {
   }
 
   await ensureSubscriptionSupportFiles(scriptTargetRoot);
-  await log(`写入青龙兼容支持文件：sendNotify.js`);
+  await log(`写入通知支持文件：sendNotify.js`);
   await log(`导入完成：${files.length} 个脚本文件`);
 
   return {
@@ -642,91 +642,14 @@ function createSubscriptionLogger(log) {
 
 function parseSubscriptionInput(subscription) {
   const rawAddress = String(subscription.url || '').trim();
-  const command = parseQinglongRepoCommand(rawAddress);
   return {
-    address: command?.address || rawAddress,
-    commandType: command?.commandType,
-    branch: String(subscription.branch || command?.branch || '').trim(),
+    address: rawAddress,
+    branch: String(subscription.branch || '').trim(),
     filters: {
-      includePattern: String(subscription.includePattern || command?.includePattern || '').trim(),
-      excludePattern: String(subscription.excludePattern || command?.excludePattern || '').trim()
+      includePattern: String(subscription.includePattern || '').trim(),
+      excludePattern: String(subscription.excludePattern || '').trim()
     }
   };
-}
-
-function parseQinglongRepoCommand(value) {
-  const tokens = splitCommandLine(value);
-  const commandIndex = tokens.findIndex((token) => ['repo', 'raw'].includes(token.toLowerCase()));
-  if (commandIndex < 0) return undefined;
-
-  const sourceIndex = tokens.findIndex((token, index) => index > commandIndex && looksLikeSubscriptionAddress(token));
-  if (sourceIndex < 0) return undefined;
-
-  const extras = tokens.slice(sourceIndex + 1);
-  const commandType = tokens[commandIndex].toLowerCase();
-  if (commandType === 'raw') {
-    return {
-      commandType,
-      address: tokens[sourceIndex]
-    };
-  }
-
-  return {
-    commandType,
-    address: tokens[sourceIndex],
-    includePattern: extras[0] || '',
-    excludePattern: extras[1] || '',
-    dependencyPattern: extras[2] || '',
-    branch: extras[3] || ''
-  };
-}
-
-function splitCommandLine(value) {
-  const tokens = [];
-  let token = '';
-  let quote = '';
-  let hasToken = false;
-
-  for (const char of String(value || '')) {
-    if (quote) {
-      if (char === quote) {
-        quote = '';
-      } else {
-        token += char;
-      }
-      hasToken = true;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      hasToken = true;
-      continue;
-    }
-
-    if (/\s/.test(char)) {
-      if (hasToken) {
-        tokens.push(token);
-        token = '';
-        hasToken = false;
-      }
-      continue;
-    }
-
-    token += char;
-    hasToken = true;
-  }
-
-  if (hasToken) tokens.push(token);
-  return tokens;
-}
-
-function looksLikeSubscriptionAddress(value) {
-  const trimmed = String(value || '').trim();
-  return /^https?:\/\//i.test(trimmed) ||
-    /^git@github\.com:/i.test(trimmed) ||
-    /^ssh:\/\/git@github\.com\//i.test(trimmed) ||
-    /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?$/i.test(trimmed);
 }
 
 function parseGitHubShorthandSource(parsedInput, subscription) {
@@ -761,14 +684,6 @@ function parseSubscriptionSource(subscription) {
 
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new AppError('INVALID_SUBSCRIPTION_URL', '订阅地址只支持 http 和 https');
-  }
-
-  if (parsedInput.commandType === 'raw') {
-    return {
-      type: 'http-file',
-      url: parsed.toString(),
-      fileName: path.posix.basename(decodeURIComponent(parsed.pathname)) || 'downloaded-script.js'
-    };
   }
 
   if (parsed.hostname === 'raw.githubusercontent.com') {

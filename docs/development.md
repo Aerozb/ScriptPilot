@@ -32,7 +32,7 @@ src/main/modules/logs/    定期日志清理
 src/main/modules/scheduler/ Cron 调度
 src/main/modules/runtime/ 内置 Node 运行时解析
 src/main/modules/dependencies/ 脚本依赖检测和 npm 自动安装
-src/main/modules/qinglong/ 本地青龙式脚本、环境、配置、订阅、依赖服务
+src/main/modules/workspace/ 本地脚本、环境、配置、订阅、依赖服务
 src/main/modules/startup/ Windows 任务计划开机启动
 src/main/modules/settings/ 设置持久化
 src/electron/             Electron main、preload、本机 API、renderer
@@ -126,7 +126,7 @@ src/electron/renderer/renderer.js
 
 ## 订阅
 
-订阅支持 GitHub 仓库、GitHub Raw、普通 HTTP 脚本、`ql repo` 和 `ql raw`。订阅名称优先作为本地目录名，例如订阅名称 `faker3` 会拉取到 `data/scripts/faker3`。
+订阅支持 GitHub 仓库、GitHub Raw、普通 HTTP 脚本和 `owner/repo` 简写。订阅名称优先作为本地目录名，例如订阅名称 `faker3` 会拉取到 `data/scripts/faker3`。
 
 勾选自动建任务时，会解析脚本中的 cron 声明。没有 cron 或 cron 无效的脚本跳过，不强行创建任务。自动创建的任务名称优先取脚本里的 `new Env('任务名')`，没有时再取 cron tag，最后取脚本文件名。
 
