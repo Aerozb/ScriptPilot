@@ -31,3 +31,4 @@ Use this skill for ScriptPilot implementation, validation, and release work.
 - Do not commit `release/`, `.tools/`, `node_modules/`, local data, logs, CK, or cache.
 - Sync changed app resources into `release/win-unpacked/app/resources/app/` when the existing portable EXE should see the change after restart.
 - Increment `package.json`, `package-lock.json`, the Git tag, zip name, and release title for every new published artifact.
+- Keep GitHub Release notes user-facing and Chinese-only; do not list artifact names, checksum sections, SHA256 values, or `.sha256` filenames in the notes.
