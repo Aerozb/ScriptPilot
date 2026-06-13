@@ -78,6 +78,15 @@ export class Task {
     this.updatedAt = now.toISOString();
   }
 
+  refreshSubscriptionMetadata(input, now = new Date()) {
+    if (input.name && String(input.name).trim()) this.name = String(input.name).trim();
+    if (input.cronExpression !== undefined) this.cronExpression = normalizeOptionalText(input.cronExpression);
+    if (input.cwd !== undefined) this.cwd = normalizeOptionalText(input.cwd);
+    if (input.labels !== undefined) this.labels = normalizeStringArray(input.labels);
+    if (input.remark !== undefined) this.remark = normalizeOptionalText(input.remark);
+    this.updatedAt = now.toISOString();
+  }
+
   setEnabled(enabled, now = new Date()) {
     this.enabled = Boolean(enabled);
     this.updatedAt = now.toISOString();

@@ -336,6 +336,7 @@ export class LocalQinglongService {
     const summary = {
       enabled: true,
       created: 0,
+      updatedExisting: 0,
       skippedExisting: 0,
       skippedNoCron: 0,
       skippedInvalidCron: 0,
@@ -347,14 +348,9 @@ export class LocalQinglongService {
     }
 
     const existingTasks = await this.taskRepository.list();
-    const existingScriptPaths = new Set(existingTasks.map((task) => task.scriptPath));
+    const existingTasksByScriptPath = new Map(existingTasks.map((task) => [task.scriptPath, task]));
+    const usedTaskNames = new Set(existingTasks.map((task) => task.name));
     for (const scriptPath of pullResult.files || []) {
-      if (existingScriptPaths.has(scriptPath)) {
-        summary.skippedExisting += 1;
-        summary.items.push({ scriptPath, status: 'skipped-existing' });
-        continue;
-      }
-
       let content = '';
       try {
         content = await readFile(resolvePortablePath(this.paths, scriptPath, { label: '订阅脚本路径' }), 'utf8');
@@ -379,8 +375,31 @@ export class LocalQinglongService {
         continue;
       }
 
+      const taskName = cronInfo.name || createTaskNameFromScriptPath(scriptPath);
+      const existingTask = existingTasksByScriptPath.get(scriptPath);
+      if (existingTask) {
+        const updated = await this.refreshExistingSubscriptionTask({
+          task: existingTask,
+          subscription,
+          pullResult,
+          scriptPath,
+          cronInfo,
+          taskName,
+          usedTaskNames,
+          log
+        });
+        if (updated) {
+          summary.updatedExisting += 1;
+          summary.items.push({ scriptPath, status: 'updated-existing', taskId: existingTask.id, cron: cronInfo.cron, name: existingTask.name });
+        } else {
+          summary.skippedExisting += 1;
+          summary.items.push({ scriptPath, status: 'skipped-existing', taskId: existingTask.id });
+        }
+        continue;
+      }
+
       const task = Task.create({
-        name: cronInfo.name || createTaskNameFromScriptPath(scriptPath),
+        name: createUniqueTaskName(taskName, usedTaskNames),
         scriptPath,
         cwd: pullResult.localPath,
         cronExpression: cronInfo.cron,
@@ -390,14 +409,46 @@ export class LocalQinglongService {
         timeoutMs: 30000
       });
       await this.taskRepository.save(task);
-      existingScriptPaths.add(scriptPath);
+      existingTasksByScriptPath.set(scriptPath, task);
+      usedTaskNames.add(task.name);
       summary.created += 1;
-      summary.items.push({ scriptPath, status: 'created', taskId: task.id, cron: cronInfo.cron });
+      summary.items.push({ scriptPath, status: 'created', taskId: task.id, cron: cronInfo.cron, name: task.name });
       await log(`自动创建任务：${task.name}，cron=${cronInfo.cron}`);
     }
 
-    await log(`自动创建任务完成：新建 ${summary.created}，已存在 ${summary.skippedExisting}，无 cron ${summary.skippedNoCron}，无效 ${summary.skippedInvalidCron}`);
+    await log(`自动创建任务完成：新建 ${summary.created}，更新 ${summary.updatedExisting}，已存在 ${summary.skippedExisting}，无 cron ${summary.skippedNoCron}，无效 ${summary.skippedInvalidCron}`);
     return summary;
+  }
+
+  async refreshExistingSubscriptionTask(input) {
+    const { task, subscription, pullResult, cronInfo, taskName, usedTaskNames, log } = input;
+    if (!isSubscriptionManagedTask(task, subscription)) return false;
+
+    const nextName = createUniqueTaskName(taskName, usedTaskNames, task.name);
+    const nextLabels = mergeTaskLabels(task.labels, ['订阅', subscription.name]);
+    const nextRemark = `订阅「${subscription.name}」自动创建`;
+    const changed =
+      task.name !== nextName ||
+      task.cronExpression !== cronInfo.cron ||
+      task.cwd !== pullResult.localPath ||
+      task.remark !== nextRemark ||
+      !sameStringArray(task.labels, nextLabels);
+
+    if (!changed) return false;
+
+    const previousName = task.name;
+    task.refreshSubscriptionMetadata({
+      name: nextName,
+      cronExpression: cronInfo.cron,
+      cwd: pullResult.localPath,
+      labels: nextLabels,
+      remark: nextRemark
+    });
+    await this.taskRepository.save(task);
+    usedTaskNames.delete(previousName);
+    usedTaskNames.add(task.name);
+    await log(`自动更新任务：${previousName} -> ${task.name}，cron=${cronInfo.cron}`);
+    return true;
   }
 
   async executeSubscriptionRun(subscriptionId, runId) {
@@ -1413,10 +1464,44 @@ function createTaskNameFromScriptPath(scriptPath) {
   return normalizeTaskName(path.posix.basename(String(scriptPath || ''))) || '订阅脚本任务';
 }
 
+function createUniqueTaskName(baseName, usedTaskNames, currentName = '') {
+  const normalizedBase = normalizeTaskName(baseName) || '订阅脚本任务';
+  if (currentName && normalizedBase === currentName) return normalizedBase;
+  if (!usedTaskNames.has(normalizedBase)) return normalizedBase;
+
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${normalizedBase} (${index})`;
+    if (candidate === currentName || !usedTaskNames.has(candidate)) return candidate;
+  }
+
+  return `${normalizedBase} (${Date.now()})`;
+}
+
+function isSubscriptionManagedTask(task, subscription) {
+  const labels = new Set(task.labels || []);
+  const remark = String(task.remark || '');
+  return labels.has('订阅') ||
+    (subscription?.name && labels.has(subscription.name)) ||
+    (subscription?.name && remark.includes(`订阅「${subscription.name}」自动创建`));
+}
+
+function mergeTaskLabels(currentLabels = [], nextLabels = []) {
+  return [...new Set([
+    ...currentLabels.map((label) => String(label).trim()).filter(Boolean),
+    ...nextLabels.map((label) => String(label).trim()).filter(Boolean)
+  ])];
+}
+
+function sameStringArray(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
 function formatAutoCreateTaskSummary(summary) {
   if (!summary?.enabled) return '';
   const parts = [];
   if (summary.created) parts.push(`自动创建 ${summary.created} 个任务`);
+  if (summary.updatedExisting) parts.push(`自动更新 ${summary.updatedExisting} 个任务`);
   if (summary.skippedExisting) parts.push(`跳过已存在 ${summary.skippedExisting} 个`);
   if (summary.skippedNoCron) parts.push(`无 cron ${summary.skippedNoCron} 个`);
   if (summary.skippedInvalidCron) parts.push(`无效 cron ${summary.skippedInvalidCron} 个`);

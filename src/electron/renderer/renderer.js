@@ -298,7 +298,7 @@ async function init() {
   els.apiUrl.textContent = state.info.apiUrl || '未启动';
   els.sideApiUrl.textContent = state.info.apiUrl || '未启动';
   await loadAppearanceSettings();
-  await showPage(state.activePage || 'crontab');
+  activatePage(state.activePage || 'crontab');
   await Promise.all([
     refreshAll(),
     refreshStartupStatus()
@@ -358,6 +358,11 @@ function renderAll() {
 }
 
 async function showPage(pageName) {
+  activatePage(pageName);
+  await refreshActivePage(pageName);
+}
+
+function activatePage(pageName) {
   state.activePage = pageName;
   document.querySelectorAll('.menu-item').forEach((item) => {
     item.classList.toggle('active', item.dataset.page === pageName);
@@ -368,12 +373,12 @@ async function showPage(pageName) {
   const meta = pageMeta[pageName] || pageMeta.crontab;
   els.pageTitle.textContent = meta[0];
   els.pageSubtitle.textContent = meta[1];
-  await refreshActivePage(pageName);
 }
 
 async function refreshActivePage(pageName) {
   try {
-    if (pageName === 'script') await refreshScripts();
+    if (pageName === 'crontab') await refreshCrontabPage();
+    else if (pageName === 'script') await refreshScripts();
     else if (pageName === 'config') await refreshConfigs();
     else if (pageName === 'log') await refreshRuns();
     else if (pageName === 'dependence') await refreshDependencies();
@@ -381,6 +386,12 @@ async function refreshActivePage(pageName) {
   } catch (error) {
     toast(formatError(error));
   }
+}
+
+async function refreshCrontabPage() {
+  await refreshTasksAndRuns();
+  renderMetrics();
+  renderTasks();
 }
 
 function confirmAction(options) {
