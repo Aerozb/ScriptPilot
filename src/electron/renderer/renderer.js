@@ -11,7 +11,7 @@ const pageMeta = {
   script: ['脚本管理', '管理 data/scripts 下的脚本文件，可直接保存、运行和删除。'],
   dependence: ['依赖管理', '查看和安装 npm 依赖，依赖统一写入 data/node_modules。'],
   log: ['日志管理', '查看任务、API、手动运行和订阅拉取产生的日志。'],
-  setting: ['系统设置', '绿色目录、开机启动、外观和对外接口。']
+  setting: ['系统设置', '绿色目录、更新、网络加速、开机启动、外观和对外接口。']
 };
 
 const state = {
@@ -48,6 +48,7 @@ const state = {
   taskSort: { field: 'pinned', direction: 'DESC' },
   taskRows: [],
   taskFilteredTotal: 0,
+  updateInfo: undefined,
   currentConfigName: '',
   currentScriptPath: '',
   currentRunId: '',
@@ -241,7 +242,14 @@ function bindEvents() {
 
   els.enableStartupButton.addEventListener('click', () => updateStartup(() => api.enableStartup()));
   els.disableStartupButton.addEventListener('click', () => updateStartup(() => api.disableStartup()));
+  els.checkUpdateButton.addEventListener('click', () => checkForUpdates({ silent: false }));
+  els.downloadUpdateButton.addEventListener('click', () => downloadLatestUpdate());
+  els.openUpdatePageButton.addEventListener('click', () => openLatestUpdatePage());
+  els.modalDownloadUpdateButton.addEventListener('click', () => downloadLatestUpdate());
+  els.modalOpenUpdatePageButton.addEventListener('click', () => openLatestUpdatePage());
   els.cleanupLogsNowButton.addEventListener('click', cleanupLogsNow);
+  els.saveNetworkButton.addEventListener('click', saveNetworkSettings);
+  els.saveSubscriptionNetworkButton.addEventListener('click', saveNetworkSettings);
   els.saveAppearanceButton.addEventListener('click', saveAppearanceSettings);
   ['logCleanupEnabledInput', 'logRetentionDaysInput', 'logCleanupIntervalDaysInput'].forEach((id) => {
     els[id].addEventListener(id === 'logCleanupEnabledInput' ? 'change' : 'input', scheduleLogCleanupAutoSave);
@@ -307,12 +315,16 @@ async function init() {
   els.runtimeRoot.textContent = state.info.runtimeRoot;
   els.apiUrl.textContent = state.info.apiUrl || '未启动';
   els.sideApiUrl.textContent = state.info.apiUrl || '未启动';
+  renderUpdateState();
   await loadAppearanceSettings();
   activatePage(state.activePage || 'crontab');
   await Promise.all([
     refreshAll(),
     refreshStartupStatus()
   ]);
+  if (!state.info.acceptanceTest) {
+    window.setTimeout(() => checkForUpdates({ silent: true }), 1200);
+  }
 }
 
 async function refreshAll() {
@@ -3499,6 +3511,7 @@ function applySettings(settings) {
   applyCrontabSettings(state.settings.crontab);
   fillLogCleanupForm(state.settings.logCleanup);
   updateLogCleanupStatus(state.settings.logCleanup);
+  fillNetworkForm(state.settings.network);
 }
 
 function mergeSettings(patch = {}) {
@@ -3516,6 +3529,150 @@ function mergeSettings(patch = {}) {
     logCleanup: {
       ...(state.settings?.logCleanup || {}),
       ...(patch.logCleanup || {})
+    },
+    network: {
+      ...(state.settings?.network || {}),
+      ...(patch.network || {})
+    }
+  };
+}
+
+async function checkForUpdates(options = {}) {
+  const silent = options.silent === true;
+  if (!silent) {
+    els.checkUpdateButton.disabled = true;
+    els.updateStatus.textContent = `当前版本：${state.info?.version || '-'}，正在检查更新...`;
+  }
+  try {
+    const info = await api.checkForUpdates();
+    state.updateInfo = info;
+    renderUpdateState();
+    if (info.hasUpdate) {
+      openUpdateModal(info);
+      if (!silent) toast(`发现新版本 ${info.latestVersion}`);
+    } else if (!silent) {
+      toast('当前已经是最新版本');
+    }
+  } catch (error) {
+    if (!silent) {
+      els.updateStatus.textContent = `当前版本：${state.info?.version || '-'}，检查失败`;
+      els.updateSummary.textContent = formatError(error);
+      toast(formatError(error));
+    }
+  } finally {
+    els.checkUpdateButton.disabled = false;
+  }
+}
+
+function renderUpdateState() {
+  const currentVersion = state.info?.version || state.updateInfo?.currentVersion || '-';
+  const latestVersion = state.updateInfo?.latestVersion || '';
+  if (!state.updateInfo) {
+    els.updateStatus.textContent = `当前版本：${currentVersion}`;
+    els.updateSummary.textContent = '发现新版本后会提示下载，下载链接会自动使用 ghfast 加速。';
+    els.downloadUpdateButton.hidden = true;
+    els.openUpdatePageButton.hidden = true;
+    return;
+  }
+
+  if (state.updateInfo.hasUpdate) {
+    els.updateStatus.textContent = `当前版本：${currentVersion}，最新版本：${latestVersion}`;
+    els.updateSummary.textContent = `发现新版本 ${latestVersion}，可下载 ${state.updateInfo.assetName || '便携版压缩包'}。`;
+    els.downloadUpdateButton.hidden = !state.updateInfo.downloadUrl;
+    els.openUpdatePageButton.hidden = !state.updateInfo.releaseUrl;
+  } else {
+    els.updateStatus.textContent = `当前版本：${currentVersion}，已是最新`;
+    els.updateSummary.textContent = '暂未发现新版本。';
+    els.downloadUpdateButton.hidden = true;
+    els.openUpdatePageButton.hidden = !state.updateInfo.releaseUrl;
+  }
+}
+
+function openUpdateModal(info) {
+  els.currentVersionText.textContent = info.currentVersion || state.info?.version || '-';
+  els.latestVersionText.textContent = info.latestVersion || '-';
+  els.updateModalTitle.textContent = `发现新版本 ${info.latestVersion || ''}`.trim();
+  els.updateModalMeta.textContent = `下载 ${info.assetName || '便携版压缩包'} 时会使用 ghfast 加速地址。`;
+  els.updateReleaseNotes.textContent = formatReleaseNotes(info.body);
+  els.modalDownloadUpdateButton.disabled = !info.downloadUrl;
+  els.modalOpenUpdatePageButton.disabled = !info.releaseUrl;
+  if (!els.updateModal.open) els.updateModal.showModal();
+}
+
+async function downloadLatestUpdate() {
+  try {
+    const info = state.updateInfo || await api.checkForUpdates();
+    state.updateInfo = info;
+    renderUpdateState();
+    if (!info.downloadUrl) {
+      toast('没有找到可下载的新版安装包');
+      return;
+    }
+    const result = await api.downloadUpdate({ downloadUrl: info.downloadUrl });
+    toast(`已打开下载链接：${result.url}`);
+  } catch (error) {
+    toast(formatError(error));
+  }
+}
+
+async function openLatestUpdatePage() {
+  try {
+    const info = state.updateInfo || await api.checkForUpdates();
+    state.updateInfo = info;
+    renderUpdateState();
+    if (!info.releaseUrl) {
+      toast('没有找到新版发布页');
+      return;
+    }
+    await api.openUpdatePage({ releaseUrl: info.releaseUrl });
+  } catch (error) {
+    toast(formatError(error));
+  }
+}
+
+function formatReleaseNotes(text) {
+  const value = String(text || '').trim();
+  return value || '该版本没有填写更新说明。';
+}
+
+async function saveNetworkSettings(event) {
+  try {
+    const inputId = event?.currentTarget?.id === 'saveSubscriptionNetworkButton'
+      ? 'subscriptionGithubAcceleratorInput'
+      : 'githubAcceleratorInput';
+    const settings = mergeSettings(readNetworkForm(inputId));
+    const saved = await api.saveSettings(settings);
+    applySettings(saved);
+    els.networkStatus.textContent = saved.network?.githubAcceleratorBaseUrl
+      ? `网络设置已保存：${saved.network.githubAcceleratorBaseUrl}`
+      : '网络设置已保存：未配置加速地址，订阅拉取默认直连';
+    els.subscriptionNetworkStatus.textContent = saved.network?.githubAcceleratorBaseUrl
+      ? `已保存：${saved.network.githubAcceleratorBaseUrl}`
+      : '已保存：未配置加速地址，默认直连';
+    toast('网络设置已保存');
+  } catch (error) {
+    els.networkStatus.textContent = formatError(error);
+    els.subscriptionNetworkStatus.textContent = formatError(error);
+    toast(formatError(error));
+  }
+}
+
+function fillNetworkForm(network = {}) {
+  const value = network.githubAcceleratorBaseUrl || '';
+  els.githubAcceleratorInput.value = value;
+  els.subscriptionGithubAcceleratorInput.value = value;
+  els.networkStatus.textContent = network.githubAcceleratorBaseUrl
+    ? `订阅 GitHub 拉取失败时会使用：${network.githubAcceleratorBaseUrl}`
+    : '未配置加速地址，订阅拉取默认直连';
+  els.subscriptionNetworkStatus.textContent = network.githubAcceleratorBaseUrl
+    ? `GitHub 拉取失败时重试：${network.githubAcceleratorBaseUrl}`
+    : '未配置加速地址，默认直连';
+}
+
+function readNetworkForm(inputId = 'githubAcceleratorInput') {
+  return {
+    network: {
+      githubAcceleratorBaseUrl: normalizeOptionalUrl(readValue(inputId), 'GitHub 加速地址')
     }
   };
 }
@@ -3933,6 +4090,27 @@ function validatePortablePathText(value, label, options = {}) {
       throw new Error(`${label} 必须是 ${SCRIPT_FILE_EXTENSIONS.join('、')} 脚本文件`);
     }
   }
+}
+
+function normalizeOptionalUrl(value, label) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let parsed;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    throw new Error(`${label} 格式不正确，请填写 http 或 https 地址`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${label} 只支持 http 或 https`);
+  }
+  parsed.username = '';
+  parsed.password = '';
+  parsed.hash = '';
+  parsed.search = '';
+  const normalized = parsed.toString();
+  return normalized.endsWith('/') ? normalized : `${normalized}/`;
 }
 
 function assertValidDependencyName(name) {

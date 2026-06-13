@@ -105,6 +105,15 @@
               </div>
             </div>
             <div id="subscriptionRunStatus" class="run-status" hidden></div>
+            <div class="inline-config-card">
+              <div>
+                <strong>GitHub 拉取加速</strong>
+                <p class="hint">默认直连。填写加速地址后，GitHub 仓库或 Raw 文件直连失败时会自动重试。</p>
+              </div>
+              <input id="subscriptionGithubAcceleratorInput" class="search" placeholder="可留空，例如：https://ghfast.top/" />
+              <button class="ghost" id="saveSubscriptionNetworkButton" type="button">保存</button>
+              <span id="subscriptionNetworkStatus" class="selection-text">未配置加速地址</span>
+            </div>
             <div id="subscriptionTable" class="table-wrap"></div>
           </div>
         </section>
@@ -239,6 +248,33 @@
               <p class="hint">业务数据、日志、缓存、依赖和设置都写入安装目录下的 data，不写入 AppData。</p>
             </div>
 
+            <div class="panel update-panel">
+              <div class="log-cleanup-header">
+                <div>
+                  <h2>软件更新</h2>
+                  <p id="updateStatus" class="log-cleanup-status">当前版本：读取中</p>
+                </div>
+                <button class="ghost" id="checkUpdateButton" type="button">检查更新</button>
+              </div>
+              <p id="updateSummary" class="hint">发现新版本后会提示下载，下载链接会自动使用 ghfast 加速。</p>
+              <div class="actions-row">
+                <button class="primary" id="downloadUpdateButton" type="button" hidden>下载新版</button>
+                <button class="ghost" id="openUpdatePageButton" type="button" hidden>打开发布页</button>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h2>网络加速</h2>
+              <p class="hint">订阅拉取 GitHub 仓库或 Raw 文件时，默认直连。这里填入加速地址后，直连失败会自动用该地址重试。</p>
+              <div class="form-grid">
+                <label class="full"><span>GitHub 加速地址，可留空</span><input id="githubAcceleratorInput" placeholder="例如：https://ghfast.top/" /></label>
+              </div>
+              <div class="actions-row">
+                <button class="primary" id="saveNetworkButton" type="button">保存网络设置</button>
+                <span id="networkStatus" class="selection-text">未修改</span>
+              </div>
+            </div>
+
             <div class="panel">
               <h2>开机启动</h2>
               <p id="startupStatus" class="notice">正在读取状态...</p>
@@ -327,16 +363,16 @@ Content-Type: application/json
           <label id="taskScriptContentField" class="full" hidden><span>脚本内容</span><textarea id="taskScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
 console.log("定时任务执行成功");
 console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));</textarea></label>
-          <label><span>命令行参数，每行一个</span><textarea id="taskArgsInput" rows="4"></textarea></label>
-          <label><span>结构化参数 JSON</span><textarea id="taskParamsInput" rows="4">{
+          <label><span class="label-with-help">命令行参数，每行一个<button class="help-icon" type="button" aria-label="命令行参数说明" title="每一行都会作为一个命令行参数传给脚本，脚本里用 process.argv.slice(2) 读取；不需要参数可以留空。">?</button></span><textarea id="taskArgsInput" rows="4"></textarea></label>
+          <label><span class="label-with-help">结构化参数 JSON<button class="help-icon" type="button" aria-label="结构化参数说明" title="必须填写 JSON 对象。运行时会写入环境变量 SCRIPTPILOT_PARAMS，脚本可用 JSON.parse(process.env.SCRIPTPILOT_PARAMS || '{}') 读取。">?</button></span><textarea id="taskParamsInput" rows="4">{
   "来源": "定时任务"
 }</textarea></label>
-          <label><span>工作目录</span><input id="taskCwdInput" value="data" /></label>
+          <label><span class="label-with-help">工作目录<button class="help-icon" type="button" aria-label="工作目录说明" title="脚本运行时的当前目录，默认 data。只能填写安装目录内的相对路径，脚本读写相对文件时会从这里开始。">?</button></span><input id="taskCwdInput" value="data" /></label>
           <label><span>超时毫秒，0 表示不限制</span><input id="taskTimeoutInput" type="number" min="0" value="30000" /></label>
-          <label><span>额外定时规则，每行一个</span><textarea id="taskExtraSchedulesInput" rows="3" placeholder="0 8 * * *&#10;0 20 * * *"></textarea></label>
+          <label><span class="label-with-help">额外定时规则，每行一个<button class="help-icon" type="button" aria-label="额外定时规则说明" title="同一个任务除了主 Cron 外，还可以额外添加多个触发时间。每行一个 5 段 Cron，不支持 @once 或 @boot。">?</button></span><textarea id="taskExtraSchedulesInput" rows="3" placeholder="0 8 * * *&#10;0 20 * * *"></textarea></label>
           <label><span>标签，每行一个</span><textarea id="taskLabelsInput" rows="3" placeholder="签到&#10;重要"></textarea></label>
           <label class="full"><span>声明依赖，每行一个，可留空</span><textarea id="taskDependenciesInput" rows="3" placeholder="axios&#10;dayjs"></textarea></label>
-          <label><span>日志名称</span><input id="taskLogNameInput" placeholder="可留空，默认自动生成" /></label>
+          <label><span class="label-with-help">日志名称<button class="help-icon" type="button" aria-label="日志名称说明" title="用于区分日志目录和日志列表显示。留空会按任务自动生成，想让日志更好找时可以填写。">?</button></span><input id="taskLogNameInput" placeholder="可留空，默认自动生成" /></label>
           <label><span>备注</span><input id="taskRemarkInput" placeholder="任务说明" /></label>
           <label><span>执行前</span><textarea id="taskBeforeInput" rows="3" placeholder="运行任务前执行的说明或命令"></textarea></label>
           <label><span>执行后</span><textarea id="taskAfterInput" rows="3" placeholder="运行任务后执行的说明或命令"></textarea></label>
@@ -601,6 +637,30 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
           <button class="ghost" id="copySubscriptionLogButton" type="button">复制日志</button>
           <button class="ghost" id="openSubscriptionLogPageButton" type="button">在日志页打开</button>
           <button class="primary" type="button" data-close-modal>关闭</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="updateModal" class="modal wide">
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <h2 id="updateModalTitle">发现新版本</h2>
+            <small id="updateModalMeta">下载会使用 ghfast 加速地址。</small>
+          </div>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <div class="update-card">
+          <div class="update-version-row">
+            <span>当前版本</span><code id="currentVersionText">-</code>
+            <span>最新版本</span><code id="latestVersionText">-</code>
+          </div>
+          <pre id="updateReleaseNotes" class="terminal update-notes">暂无更新说明</pre>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" id="laterUpdateButton" type="button" data-close-modal>稍后再说</button>
+          <button class="ghost" id="modalOpenUpdatePageButton" type="button">打开发布页</button>
+          <button class="primary" id="modalDownloadUpdateButton" type="button">下载新版</button>
         </div>
       </div>
     </dialog>

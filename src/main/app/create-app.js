@@ -50,7 +50,8 @@ export async function createApp(options = {}) {
   const settingsRepository = new JsonSettingsRepository(paths.settingsJson);
   const qinglongService = new LocalQinglongService(paths, {
     runRepository,
-    taskRepository
+    taskRepository,
+    settingsRepository
   });
   const logCleanupService = new LogCleanupService({
     paths,

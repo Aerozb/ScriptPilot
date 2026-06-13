@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeAcceleratorBaseUrl } from '../../../shared/network/url-accelerator.js';
 
 const DEFAULT_SETTINGS = {
   appearance: {
@@ -24,6 +25,9 @@ const DEFAULT_SETTINGS = {
     retentionDays: 30,
     intervalDays: 3,
     lastCleanedAt: undefined
+  },
+  network: {
+    githubAcceleratorBaseUrl: ''
   }
 };
 
@@ -77,6 +81,11 @@ function mergeSettings(base, input) {
       retentionDays: clampInteger(input?.logCleanup?.retentionDays, 1, 3650, base.logCleanup.retentionDays),
       intervalDays: clampInteger(input?.logCleanup?.intervalDays, 1, 365, base.logCleanup.intervalDays),
       lastCleanedAt: normalizeOptionalIsoDate(input?.logCleanup?.lastCleanedAt, base.logCleanup.lastCleanedAt)
+    },
+    network: {
+      githubAcceleratorBaseUrl: input?.network?.githubAcceleratorBaseUrl === undefined
+        ? normalizeAcceleratorBaseUrl(base.network?.githubAcceleratorBaseUrl)
+        : normalizeAcceleratorBaseUrl(input.network.githubAcceleratorBaseUrl)
     }
   };
 }

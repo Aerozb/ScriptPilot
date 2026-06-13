@@ -57,6 +57,8 @@ try {
     await page.locator('[data-page="setting"]').click();
     await expectText(page, '#pageTitle', '系统设置');
     await expectText(page, '#apiUrl', apiBaseUrl);
+    await expectText(page, '#updateStatus', '当前版本');
+    await expectText(page, '#networkStatus', '默认直连');
     await page.waitForFunction((expected) => {
       const actual = document.querySelector('#dataRoot')?.textContent?.replaceAll('\\', '/');
       return actual === expected.replaceAll('\\', '/');
@@ -68,6 +70,19 @@ try {
     for (const label of ['文件', '编辑', '视图', '窗口', '帮助']) {
       assert(labels.includes(label), `应用菜单缺少中文项: ${label}`);
     }
+  });
+
+  await check('网络加速设置支持自定义保存并写入绿色目录', async () => {
+    await page.locator('[data-page="setting"]').click();
+    await expectText(page, '#pageTitle', '系统设置');
+    await page.locator('#githubAcceleratorInput').fill('ghfast.top');
+    await page.locator('#saveNetworkButton').click();
+    await waitForSettingsValue((settings) => settings.network?.githubAcceleratorBaseUrl === 'https://ghfast.top/');
+    assert(await page.locator('#githubAcceleratorInput').inputValue() === 'https://ghfast.top/', 'GitHub 加速地址没有在表单中归一化');
+    await expectText(page, '#networkStatus', 'https://ghfast.top/');
+    await page.locator('[data-page="subscription"]').click();
+    await expectText(page, '#subscriptionNetworkStatus', 'https://ghfast.top/');
+    assert(await page.locator('#subscriptionGithubAcceleratorInput').inputValue() === 'https://ghfast.top/', '订阅页 GitHub 加速地址没有同步');
   });
 
   await check('日志清理默认启用并支持实时保存配置', async () => {
@@ -286,7 +301,9 @@ try {
     assert(faker3?.subscriptionFolder === 'faker3', `faker3 订阅目录异常: ${faker3?.subscriptionFolder}`);
     assert(faker3?.localPath === 'data/scripts/faker3', `faker3 本地目录异常: ${faker3?.localPath}`);
     assert(faker3?.repoPath === 'data/repo/faker3', `faker3 仓库缓存目录异常: ${faker3?.repoPath}`);
+    assert(faker3?.lastLog?.includes('GitHub 加速地址：https://ghfast.top/'), 'faker3 订阅日志没有记录 GitHub 加速地址配置');
     await expectText(page, '#subscriptionLogViewer', 'faker3');
+    await expectText(page, '#subscriptionLogViewer', 'GitHub 加速地址：https://ghfast.top/');
     await page.locator('#subscriptionLogModal [data-close-modal]').last().click();
     await page.locator('#subscriptionLogModal').waitFor({ state: 'hidden' });
   });
@@ -996,7 +1013,7 @@ async function waitForSettingsValue(predicate, timeoutMs = 30000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error('settings.json 未写入预期日志清理配置');
+  throw new Error('settings.json 未写入预期配置');
 }
 
 async function waitForSubscription(predicate, timeoutMs = 30000) {

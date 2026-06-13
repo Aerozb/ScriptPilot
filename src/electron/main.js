@@ -21,6 +21,7 @@ import { getRunQuery } from '../main/modules/runs/application/queries/get-run.qu
 import { getRunLogQuery } from '../main/modules/runs/application/queries/get-run-log.query.js';
 import { runScriptOnceCommand } from '../main/modules/runs/application/commands/run-script-once.command.js';
 import { disableStartupTask, enableStartupTask, getStartupTaskStatus } from '../main/modules/startup/infrastructure/windows-startup-task.js';
+import { checkGitHubReleaseUpdate, createUpdateDownloadUrl } from '../main/modules/updates/infrastructure/github-update-service.js';
 import { AppError, toAppError } from '../main/shared/errors/app-error.js';
 import { assertInsidePath, resolvePortablePath } from '../main/bootstrap/portable-paths.js';
 
@@ -147,14 +148,21 @@ function registerIpc() {
   ipcMain.handle('run:get', async (_event, input) => safeInvoke(() => coreApp.queryBus.execute(getRunQuery(input))));
   ipcMain.handle('run:get-log', async (_event, input) => safeInvoke(() => coreApp.queryBus.execute(getRunLogQuery(input))));
   ipcMain.handle('app:get-info', async () => safeInvoke(async () => ({
+    version: app.getVersion(),
     portableRoot: coreApp.paths.portableRoot,
     dataRoot: coreApp.paths.dataRoot,
     runtimeRoot: coreApp.paths.runtimeRoot,
     apiUrl: apiServer?.url,
+    acceptanceTest: isAcceptanceTestMode(),
     menuLabels: Menu.getApplicationMenu()?.items.map((item) => item.label) || []
   })));
   ipcMain.handle('app:open-data-dir', async () => safeInvoke(() => shell.openPath(coreApp.paths.dataRoot)));
   ipcMain.handle('app:open-portable-path', async (_event, input) => safeInvoke(() => openPortablePath(input)));
+  ipcMain.handle('app:check-updates', async () => safeInvoke(() => checkGitHubReleaseUpdate({
+    currentVersion: app.getVersion()
+  })));
+  ipcMain.handle('app:download-update', async (_event, input) => safeInvoke(() => openUpdateDownload(input)));
+  ipcMain.handle('app:open-update-page', async (_event, input) => safeInvoke(() => openUpdatePage(input)));
   ipcMain.handle('demo:run', async () => safeInvoke(() => ensureDemoTaskAndRun(coreApp, 'scriptpilot-ui')));
   ipcMain.handle('startup:status', async () => safeInvoke(() => getStartupTaskStatus(process.execPath)));
   ipcMain.handle('startup:enable', async () => safeInvoke(() => enableStartupTask(process.execPath)));
@@ -205,6 +213,24 @@ async function openPortablePath(input = {}) {
   return { path: targetPath };
 }
 
+async function openUpdateDownload(input = {}) {
+  const downloadUrl = createUpdateDownloadUrl(input.downloadUrl);
+  if (!downloadUrl) {
+    throw new AppError('UPDATE_DOWNLOAD_URL_MISSING', '没有找到可下载的新版安装包');
+  }
+  await shell.openExternal(downloadUrl);
+  return { url: downloadUrl };
+}
+
+async function openUpdatePage(input = {}) {
+  const releaseUrl = String(input.releaseUrl || '').trim();
+  if (!/^https:\/\/github\.com\/Aerozb\/ScriptPilot\/releases\/tag\/[^/]+$/i.test(releaseUrl)) {
+    throw new AppError('UPDATE_PAGE_URL_INVALID', '更新页面地址无效');
+  }
+  await shell.openExternal(releaseUrl);
+  return { url: releaseUrl };
+}
+
 async function findExistingPortableAncestor(inputPath) {
   let current = path.resolve(inputPath);
   const root = path.resolve(coreApp.paths.portableRoot);
@@ -244,7 +270,7 @@ if (shouldRunSmokeDemo) {
   app.whenReady().then(() => runSmokeDemoAndExit(portableRoot));
 } else {
   const shouldBypassSingleInstanceLock =
-    app.commandLine.hasSwitch('acceptance-test') ||
+    isAcceptanceTestMode() ||
     app.commandLine.hasSwitch('ui-flow-test') ||
     app.commandLine.hasSwitch('ui-smoke') ||
     process.argv.includes('--acceptance-test') ||
@@ -282,6 +308,10 @@ if (shouldRunSmokeDemo) {
 function readApiPort() {
   const value = Number(process.env.SCRIPTPILOT_API_PORT);
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : 18760;
+}
+
+function isAcceptanceTestMode() {
+  return app.commandLine.hasSwitch('acceptance-test') || process.argv.includes('--acceptance-test');
 }
 
 async function runSmokeDemoAndExit(portableRoot) {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { URL } from 'node:url';
 import { JsonStore } from '../../../shared/infrastructure/filesystem/json-store.js';
 import { AppError } from '../../../shared/errors/app-error.js';
+import { createAcceleratedUrl } from '../../../shared/network/url-accelerator.js';
 import { createPortableProcessEnv, resolvePortablePath, toPortablePath } from '../../../bootstrap/portable-paths.js';
 import { resolveNodeRuntime } from '../../runtime/infrastructure/node-runtime-resolver.js';
 import { resolveGitRuntime } from '../../runtime/infrastructure/git-runtime-resolver.js';
@@ -26,13 +27,13 @@ const SCRIPT_SUBSCRIPTION_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
 const MAX_REPOSITORY_FILES = 5000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
-const GITHUB_ACCELERATOR_BASE_URL = 'https://ghfast.top/';
 
 export class LocalQinglongService {
   constructor(paths, deps = {}) {
     this.paths = paths;
     this.runRepository = deps.runRepository;
     this.taskRepository = deps.taskRepository;
+    this.settingsRepository = deps.settingsRepository;
     this.envStore = new JsonStore(path.join(paths.appStateRoot, 'envs.json'), []);
     this.subscriptionStore = new JsonStore(path.join(paths.appStateRoot, 'subscriptions.json'), []);
     this.dependencyHistoryStore = new JsonStore(path.join(paths.appStateRoot, 'dependency-history.json'), []);
@@ -293,6 +294,7 @@ export class LocalQinglongService {
         scriptRoot: this.scriptRoot,
         repoRoot: this.repoRoot,
         rawRoot: this.rawRoot,
+        network: await this.getNetworkSettings(),
         log
       });
       const autoCreateTasks = rows[index].autoCreateTasks
@@ -486,6 +488,12 @@ export class LocalQinglongService {
     }
   }
 
+  async getNetworkSettings() {
+    if (!this.settingsRepository) return {};
+    const settings = await this.settingsRepository.get();
+    return settings.network || {};
+  }
+
   async listDependencies() {
     const packageJsonPath = path.join(this.paths.dataRoot, 'package.json');
     const pkg = await readJsonOptional(packageJsonPath, { dependencies: {} });
@@ -583,6 +591,9 @@ async function pullSubscriptionFiles(input) {
   await mkdir(rawRoot, { recursive: true });
   await mkdir(input.scriptRoot, { recursive: true });
   await log(`解析订阅源：${describeSubscriptionSource(source)}`);
+  if (input.network?.githubAcceleratorBaseUrl) {
+    await log(`GitHub 加速地址：${input.network.githubAcceleratorBaseUrl}`);
+  }
   await log(`目标脚本目录：data/scripts/${subscriptionFolder}`);
   for (const folder of new Set([previousFolder, sanitizePathPart(subscriptionFolder)].filter(Boolean))) {
     const scriptFolderPath = path.join(input.scriptRoot, folder);
@@ -604,7 +615,8 @@ async function pullSubscriptionFiles(input) {
     rawRoot,
     rawFilePath: rawTargetPath,
     scriptRoot: scriptTargetRoot,
-    subscriptionFolder
+    subscriptionFolder,
+    acceleratorBaseUrl: input.network?.githubAcceleratorBaseUrl || ''
   }, log);
   const files = result.files;
   if (!files.length) {
@@ -849,6 +861,7 @@ async function downloadGitHubRepository(source, targets, log = async () => {}) {
     cloneUrl,
     branch: source.branch,
     targetRoot: targets.repoRoot,
+    acceleratorBaseUrl: targets.acceleratorBaseUrl,
     log
   });
 
@@ -891,7 +904,7 @@ async function downloadGitHubFile(source, targets, log = async () => {}) {
   await log(`下载 GitHub 文件：${source.owner}/${source.repo}/${repoPath}#${branch}`);
   await writeRemoteFile({
     url: rawUrl,
-    fallbackUrl: createGitHubAcceleratedUrl(rawUrl),
+    fallbackUrl: createGitHubAcceleratedUrl(rawUrl, targets.acceleratorBaseUrl),
     targetRoot: targets.repoRoot,
     relativePath,
     log
@@ -940,9 +953,9 @@ async function writeRemoteFile(input) {
     content = await fetchText(input.url, `下载文件失败: ${safeRelativePath}`);
   } catch (error) {
     if (!input.fallbackUrl || input.fallbackUrl === input.url) throw error;
-    await input.log?.(`直连下载失败，切换 ghfast 加速重试：${formatLogError(error)}`);
-    await input.log?.(`请求 ghfast 加速文件：${input.fallbackUrl}`);
-    content = await fetchText(input.fallbackUrl, `ghfast 加速下载文件失败: ${safeRelativePath}`);
+    await input.log?.(`直连下载失败，切换 GitHub 加速重试：${formatLogError(error)}`);
+    await input.log?.(`请求 GitHub 加速文件：${input.fallbackUrl}`);
+    content = await fetchText(input.fallbackUrl, `GitHub 加速下载文件失败: ${safeRelativePath}`);
   }
 
   const size = Buffer.byteLength(content, 'utf8');
@@ -1008,8 +1021,8 @@ async function syncGitRepositoryWithFallback(input) {
       cloneUrl: input.cloneUrl
     },
     {
-      name: 'ghfast 加速',
-      cloneUrl: createGitHubAcceleratedUrl(input.cloneUrl)
+      name: 'GitHub 加速',
+      cloneUrl: createGitHubAcceleratedUrl(input.cloneUrl, input.acceleratorBaseUrl)
     }
   ].filter((attempt, index, rows) => attempt.cloneUrl && rows.findIndex((item) => item.cloneUrl === attempt.cloneUrl) === index);
 
@@ -1037,11 +1050,8 @@ async function syncGitRepositoryWithFallback(input) {
   throw lastError;
 }
 
-function createGitHubAcceleratedUrl(targetUrl) {
-  const url = String(targetUrl || '').trim();
-  if (!url || url.startsWith(GITHUB_ACCELERATOR_BASE_URL)) return url;
-  if (!/^https:\/\/(?:github\.com|raw\.githubusercontent\.com)\//i.test(url)) return url;
-  return `${GITHUB_ACCELERATOR_BASE_URL}${url}`;
+function createGitHubAcceleratedUrl(targetUrl, acceleratorBaseUrl) {
+  return createAcceleratedUrl(targetUrl, acceleratorBaseUrl);
 }
 
 async function syncGitRepository(input) {

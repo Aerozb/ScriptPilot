@@ -12,6 +12,8 @@ import { TaskScheduler } from '../src/main/modules/scheduler/infrastructure/task
 import { assertValidCronExpression } from '../src/main/modules/scheduler/infrastructure/cron-expression.js';
 import { assertValidTaskSchedules } from '../src/main/modules/tasks/application/task-schedule-validation.js';
 import { JsonSettingsRepository } from '../src/main/modules/settings/infrastructure/json-settings-repository.js';
+import { createAcceleratedUrl, normalizeAcceleratorBaseUrl } from '../src/main/shared/network/url-accelerator.js';
+import { checkGitHubReleaseUpdate, compareVersions, createUpdateDownloadUrl } from '../src/main/modules/updates/infrastructure/github-update-service.js';
 
 const execFileAsync = promisify(execFile);
 const checks = [];
@@ -22,12 +24,16 @@ await check('JS 语法检查覆盖关键入口', async () => {
     'src/electron/main.js',
     'src/electron/preload.cjs',
     'src/electron/api-server.js',
+    'src/main/app/create-app.js',
+    'src/main/shared/network/url-accelerator.js',
     'src/main/modules/scheduler/infrastructure/cron-expression.js',
     'src/main/modules/scheduler/infrastructure/task-scheduler.js',
     'src/main/modules/tasks/application/task-schedule-validation.js',
     'src/main/modules/tasks/application/commands/create-task.handler.js',
     'src/main/modules/tasks/application/commands/update-task.handler.js',
     'src/main/modules/settings/infrastructure/json-settings-repository.js',
+    'src/main/modules/qinglong/infrastructure/local-qinglong-service.js',
+    'src/main/modules/updates/infrastructure/github-update-service.js',
     'tools/human-acceptance.mjs',
     'tools/quality-check.mjs'
   ];
@@ -79,6 +85,7 @@ await check('任务定时规则统一校验', async () => {
   assertThrows(() => assertValidTaskSchedules({ cronExpression: '@daily' }), '应拒绝未知特殊 Cron');
   assertThrows(() => assertValidTaskSchedules({ cronExpression: '*/5 * * * *', extraSchedules: ['@boot'] }), '额外定时规则不应支持特殊 Cron');
   assertThrows(() => assertValidTaskSchedules({ cronExpression: '*/5 * * * *', extraSchedules: ['/5 * * * *'] }), '应拒绝无效额外定时规则');
+  assertThrows(() => assertValidTaskSchedules({ cronExpression: '*/5 * * * *', extraSchedules: '0 8 * * *' }), '额外定时规则必须保持数组错误');
 });
 
 await check('调度器会执行额外定时规则且同一分钟不重复触发', async () => {
@@ -162,6 +169,63 @@ await check('定时任务排序设置会拒绝已取消的列', async () => {
     });
     assert(saved.crontab.sort.field === 'pinned', `排序字段未回退: ${saved.crontab.sort.field}`);
     assert(saved.crontab.sort.direction === 'ASC', '合法排序方向应保留');
+  } finally {
+    await rm(portableRoot, { recursive: true, force: true });
+  }
+});
+
+await check('GitHub 加速地址归一化且默认不强制加速', async () => {
+  assert(normalizeAcceleratorBaseUrl('ghfast.top') === 'https://ghfast.top/', '应补全加速地址协议和斜杠');
+  assert(normalizeAcceleratorBaseUrl('') === '', '空加速地址应保持为空');
+  const githubUrl = 'https://github.com/Aerozb/ScriptPilot/releases/download/v0.1.5/ScriptPilot-v0.1.5-portable.zip';
+  assert(createAcceleratedUrl(githubUrl, '') === githubUrl, '默认空配置不应加速');
+  assert(createAcceleratedUrl(githubUrl, 'https://ghfast.top/') === `https://ghfast.top/${githubUrl}`, '应拼接 GitHub 加速地址');
+  assert(createUpdateDownloadUrl(githubUrl) === `https://ghfast.top/${githubUrl}`, '更新下载必须使用 ghfast 加速');
+});
+
+await check('更新检查会识别新版并选择便携包', async () => {
+  assert(compareVersions('0.1.10', '0.1.9') > 0, '版本比较应按数字比较');
+  assert(compareVersions('v0.2.0', '0.1.99') > 0, '版本比较应忽略 v 前缀');
+  const result = await checkGitHubReleaseUpdate({
+    currentVersion: '0.1.5',
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v0.1.6',
+        name: 'ScriptPilot v0.1.6',
+        body: '中文更新说明',
+        html_url: 'https://github.com/Aerozb/ScriptPilot/releases/tag/v0.1.6',
+        published_at: '2026-06-13T00:00:00Z',
+        assets: [
+          {
+            name: 'ScriptPilot-v0.1.6-portable.zip',
+            browser_download_url: 'https://github.com/Aerozb/ScriptPilot/releases/download/v0.1.6/ScriptPilot-v0.1.6-portable.zip'
+          }
+        ]
+      })
+    })
+  });
+  assert(result.hasUpdate, '应识别有新版');
+  assert(result.assetName === 'ScriptPilot-v0.1.6-portable.zip', '应选择便携 zip');
+  assert(result.acceleratedDownloadUrl.startsWith('https://ghfast.top/https://github.com/'), '更新下载链接应使用 ghfast');
+});
+
+await check('网络设置保存 GitHub 加速地址且可清空', async () => {
+  const portableRoot = await mkdtemp(path.join(tmpdir(), 'scriptpilot-network-settings-'));
+  try {
+    const repository = new JsonSettingsRepository(path.join(portableRoot, 'data', 'state', 'settings.json'));
+    const saved = await repository.save({
+      network: {
+        githubAcceleratorBaseUrl: 'ghfast.top'
+      }
+    });
+    assert(saved.network.githubAcceleratorBaseUrl === 'https://ghfast.top/', `加速地址未归一化: ${saved.network.githubAcceleratorBaseUrl}`);
+    const cleared = await repository.save({
+      network: {
+        githubAcceleratorBaseUrl: ''
+      }
+    });
+    assert(cleared.network.githubAcceleratorBaseUrl === '', '加速地址应支持清空');
   } finally {
     await rm(portableRoot, { recursive: true, force: true });
   }
