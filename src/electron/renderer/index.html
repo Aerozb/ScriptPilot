@@ -314,8 +314,13 @@ Content-Type: application/json
           <label><span>定时类型</span><select id="taskScheduleTypeInput"><option value="normal">常规定时</option><option value="once">手动运行</option><option value="boot">开机运行</option></select></label>
           <label><span>Cron 表达式</span><input id="taskCronInput" value="*/5 * * * *" placeholder="*/5 * * * *" /></label>
           <label><span>实例模式</span><select id="taskInstanceModeInput"><option value="single">单实例</option><option value="multiple">多实例</option></select></label>
-          <label class="full"><span>脚本路径，可留空</span><input id="taskScriptPathInput" placeholder="data/scripts/task.js 或 C:\\scripts\\task.js" /></label>
-          <label class="full"><span>脚本内容，填写后会保存到 data/scripts/tasks</span><textarea id="taskScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
+          <label><span>脚本来源</span><select id="taskScriptSourceInput"><option value="existing">选择已有脚本</option><option value="inline">填写新脚本内容</option></select></label>
+          <div class="full script-path-picker">
+            <label><span id="taskScriptPathLabel">脚本路径</span><textarea id="taskScriptPathInput" rows="2" readonly placeholder="点击选择 data/scripts 下的脚本，可多选批量创建任务"></textarea></label>
+            <button class="ghost" id="chooseTaskScriptButton" type="button">选择脚本</button>
+            <small id="taskScriptPathHint">选择已有脚本时，只保存路径，不会写入脚本内容；多选会批量创建任务。</small>
+          </div>
+          <label id="taskScriptContentField" class="full" hidden><span>脚本内容</span><textarea id="taskScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
 console.log("定时任务执行成功");
 console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));</textarea></label>
           <label><span>命令行参数，每行一个</span><textarea id="taskArgsInput" rows="4"></textarea></label>
@@ -340,6 +345,28 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
       </form>
     </dialog>
 
+    <dialog id="taskScriptPickerModal" class="modal wide">
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <h2 id="taskScriptPickerTitle">选择脚本</h2>
+            <small id="taskScriptPickerHint">可多选脚本，保存后会为每个脚本创建一个任务。</small>
+          </div>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <div class="toolbar compact">
+          <input id="taskScriptPickerSearchInput" class="search" placeholder="搜索脚本名称或路径" />
+          <span id="taskScriptPickerSelectionText" class="selection-text">已选择 0 个脚本</span>
+        </div>
+        <div id="taskScriptPickerList" class="script-picker-list"></div>
+        <div class="modal-actions">
+          <button class="ghost" id="clearTaskScriptPickerButton" type="button">清空选择</button>
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" id="confirmTaskScriptPickerButton" type="button">使用选中脚本</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="taskDetailModal" class="modal wide">
       <div class="modal-card">
         <div class="modal-head">
@@ -359,6 +386,24 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
           <button class="ghost" id="detailToggleTaskButton" type="button">禁用</button>
           <button class="ghost" id="detailPinTaskButton" type="button">置顶</button>
           <button class="primary" type="button" data-close-modal>知道了</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="taskLogModal" class="modal wide">
+      <div class="modal-card subscription-log-card">
+        <div class="modal-head">
+          <div>
+            <h2 id="taskLogTitle">任务日志</h2>
+            <small id="taskLogMeta">运行后实时显示任务输出</small>
+          </div>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <pre id="taskLogViewer" class="terminal subscription-log-terminal">暂无日志</pre>
+        <div class="modal-actions">
+          <button class="ghost" id="copyTaskLogButton" type="button">复制日志</button>
+          <button class="ghost" id="openTaskLogPageButton" type="button">在日志页打开</button>
+          <button class="primary" type="button" data-close-modal>关闭</button>
         </div>
       </div>
     </dialog>
@@ -472,6 +517,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
         <label><span>分支</span><input id="subscriptionBranchInput" placeholder="main，GitHub tree/raw 地址可留空" /></label>
         <label><span>Cron 表达式</span><input id="subscriptionScheduleInput" placeholder="0 0 * * *" /></label>
         <label><span>状态</span><select id="subscriptionStatusInput"><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>
+        <label class="check-line full"><input id="subscriptionAutoCreateTasksInput" type="checkbox" />拉取后按脚本 cron 自动创建任务</label>
         <div class="modal-actions">
           <button class="ghost" type="button" data-close-modal>取消</button>
           <button class="primary" type="submit">保存订阅</button>
@@ -483,14 +529,15 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
       <div class="modal-card subscription-log-card">
         <div class="modal-head">
           <div>
-            <h2 id="subscriptionLogTitle">订阅拉取日志</h2>
-            <small id="subscriptionLogMeta">等待拉取结果</small>
+            <h2 id="subscriptionLogTitle">订阅日志</h2>
+            <small id="subscriptionLogMeta">运行后实时显示拉取日志</small>
           </div>
           <button class="icon-button" type="button" data-close-modal>×</button>
         </div>
-        <pre id="subscriptionLogViewer" class="subscription-log-viewer">暂无日志</pre>
+        <pre id="subscriptionLogViewer" class="terminal subscription-log-terminal">暂无日志</pre>
         <div class="modal-actions">
           <button class="ghost" id="copySubscriptionLogButton" type="button">复制日志</button>
+          <button class="ghost" id="openSubscriptionLogPageButton" type="button">在日志页打开</button>
           <button class="primary" type="button" data-close-modal>关闭</button>
         </div>
       </div>

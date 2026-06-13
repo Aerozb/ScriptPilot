@@ -1,13 +1,14 @@
 const api = window.scriptPilot;
+const SCRIPT_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
 const pageMeta = {
   crontab: ['定时任务', '青龙式任务表格，支持批量运行、启停、删除和查看日志。'],
-  subscription: ['订阅管理', '拉取 GitHub 仓库、GitHub Raw 或普通 HTTP 脚本到本地 data/scripts。'],
+  subscription: ['订阅管理', '拉取 GitHub 仓库、GitHub Raw 或普通 HTTP 脚本到本地 data/scripts，并查看订阅运行日志。'],
   env: ['环境变量', '保存脚本运行所需变量，支持批量启用、禁用和删除。'],
   config: ['配置文件', '编辑 data/configs 下的配置文件，所有内容留在安装目录。'],
   script: ['脚本管理', '管理 data/scripts 下的脚本文件，可直接保存、运行和删除。'],
   dependence: ['依赖管理', '查看和安装 npm 依赖，依赖统一写入 data/node_modules。'],
-  log: ['日志管理', '查看任务、API 和手动运行产生的日志。'],
+  log: ['日志管理', '查看任务、API、手动运行和订阅拉取产生的日志。'],
   setting: ['系统设置', '绿色目录、开机启动、外观和对外接口。']
 };
 
@@ -27,6 +28,13 @@ const state = {
   selectedEnvIds: new Set(),
   selectedSubscriptionIds: new Set(),
   selectedScriptPaths: new Set(),
+  taskFormScriptPaths: [],
+  taskScriptPickerSelectedPaths: new Set(),
+  taskScriptPickerExpandedDirs: new Set(['data/scripts']),
+  taskScriptPickerVisibleTree: undefined,
+  taskScriptPickerLastKeyword: '',
+  taskScriptPickerMulti: true,
+  taskMutatingIds: new Set(),
   launchingTaskIds: new Set(),
   launchingScriptPaths: new Set(),
   runningSubscriptionIds: new Set(),
@@ -40,6 +48,9 @@ const state = {
   currentConfigName: '',
   currentScriptPath: '',
   currentRunId: '',
+  currentTaskLogRunId: '',
+  currentTaskLogTaskId: '',
+  currentSubscriptionLogRunId: '',
   activePage: 'crontab'
 };
 
@@ -49,6 +60,10 @@ let logCleanupSaveTimer;
 let logCleanupSaveSeq = 0;
 let scriptSplitResize;
 let logRefreshTimer;
+let taskLogRefreshTimer;
+let subscriptionLogRefreshTimer;
+let taskScriptPickerRenderFrame;
+let envRenderFrame;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindElements();
@@ -100,8 +115,12 @@ function bindEvents() {
   els.batchPinTasksButton.addEventListener('click', () => batchSetTasksPinned(true));
   els.batchUnpinTasksButton.addEventListener('click', () => batchSetTasksPinned(false));
   els.batchLabelsButton.addEventListener('click', () => openLabelModal());
+  els.taskViewTabs.addEventListener('click', handleTaskViewTabsClick);
   els.viewManageButton.addEventListener('click', () => showViewManager());
   els.batchDeleteTasksButton.addEventListener('click', () => batchDeleteTasks());
+  els.taskTable.addEventListener('click', handleTaskTableClick);
+  els.taskTable.addEventListener('change', handleTaskTableChange);
+  els.taskTable.addEventListener('dblclick', handleTaskTableDblClick);
   els.taskPageSizeInput.addEventListener('change', async () => {
     state.taskPageSize = Number(els.taskPageSizeInput.value) || 20;
     state.taskPage = 1;
@@ -121,31 +140,49 @@ function bindEvents() {
       renderTasks();
     }
   });
+  els.taskScriptSourceInput.addEventListener('change', () => syncTaskScriptSourceFields());
+  els.taskScriptPathInput.addEventListener('click', () => {
+    if (els.taskScriptSourceInput.value === 'existing') openTaskScriptPicker();
+  });
+  els.chooseTaskScriptButton.addEventListener('click', () => openTaskScriptPicker());
+  els.taskScriptPickerSearchInput.addEventListener('input', () => scheduleTaskScriptPickerRender());
+  els.taskScriptPickerList.addEventListener('click', handleTaskScriptPickerClick);
+  els.taskScriptPickerList.addEventListener('change', handleTaskScriptPickerChange);
+  els.clearTaskScriptPickerButton.addEventListener('click', () => {
+    state.taskScriptPickerSelectedPaths.clear();
+    renderTaskScriptPicker();
+  });
+  els.confirmTaskScriptPickerButton.addEventListener('click', () => confirmTaskScriptPicker());
   els.taskScheduleTypeInput.addEventListener('change', () => syncScheduleTypeFields());
   els.labelForm.addEventListener('submit', handleLabelSubmit);
   els.removeLabelsButton.addEventListener('click', () => updateSelectedLabels('remove'));
   els.viewForm.addEventListener('submit', handleViewSubmit);
   els.createViewButton.addEventListener('click', () => openViewModal());
+  els.viewManageTable.addEventListener('click', handleViewManageClick);
 
   els.runForm.addEventListener('submit', handleRunSubmit);
 
   els.newEnvButton.addEventListener('click', () => openEnvModal());
   els.envForm.addEventListener('submit', handleEnvSubmit);
-  els.envSearchInput.addEventListener('input', () => renderEnvs());
+  els.envSearchInput.addEventListener('input', () => scheduleEnvRender());
+  els.envTable.addEventListener('click', handleEnvTableClick);
+  els.envTable.addEventListener('change', handleEnvTableChange);
   els.batchEnableEnvsButton.addEventListener('click', () => batchSetEnvsStatus('enabled'));
   els.batchDisableEnvsButton.addEventListener('click', () => batchSetEnvsStatus('disabled'));
   els.batchDeleteEnvsButton.addEventListener('click', () => batchDeleteEnvs());
 
   els.newSubscriptionButton.addEventListener('click', () => openSubscriptionModal());
   els.subscriptionForm.addEventListener('submit', handleSubscriptionSubmit);
+  els.subscriptionTable.addEventListener('click', handleSubscriptionTableClick);
+  els.subscriptionTable.addEventListener('change', handleSubscriptionTableChange);
   els.batchRunSubscriptionsButton.addEventListener('click', () => batchRunSubscriptions());
   els.batchDeleteSubscriptionsButton.addEventListener('click', () => batchDeleteSubscriptions());
-  els.copySubscriptionLogButton?.addEventListener('click', () => copySubscriptionLog());
 
   els.refreshConfigsButton.addEventListener('click', () => refreshConfigs());
   els.openConfigsDirButton.addEventListener('click', () => openPortableDirectory('data/configs'));
   els.openCurrentConfigDirButton.addEventListener('click', () => openCurrentConfigDirectory());
   els.saveConfigButton.addEventListener('click', () => saveCurrentConfig());
+  els.configList.addEventListener('click', handleConfigListClick);
 
   els.newScriptButton.addEventListener('click', () => newScript());
   els.openScriptsDirButton.addEventListener('click', () => openPortableDirectory('data/scripts'));
@@ -154,6 +191,8 @@ function bindEvents() {
   els.runScriptFileButton.addEventListener('click', () => runCurrentScript());
   els.deleteScriptButton.addEventListener('click', () => deleteCurrentScript());
   els.selectAllScriptsInput.addEventListener('change', () => toggleAllScripts(els.selectAllScriptsInput.checked));
+  els.scriptList.addEventListener('click', handleScriptListClick);
+  els.scriptList.addEventListener('change', handleScriptListChange);
   els.batchRunScriptsButton.addEventListener('click', () => batchRunScripts());
   els.batchDeleteScriptsButton.addEventListener('click', () => batchDeleteScripts());
   els.clearScriptSelectionButton.addEventListener('click', () => clearScriptSelection());
@@ -168,9 +207,17 @@ function bindEvents() {
   els.dependencyNameInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') installDependency();
   });
+  els.dependencyTable.addEventListener('click', handleDependencyTableClick);
 
   els.refreshRunsButton.addEventListener('click', () => refreshRuns());
+  els.runList.addEventListener('click', handleRunListClick);
   els.copyLogButton.addEventListener('click', () => copyCurrentLog());
+  els.copyTaskLogButton.addEventListener('click', () => copyTaskLog());
+  els.openTaskLogPageButton.addEventListener('click', () => openCurrentTaskLogPage());
+  els.taskLogModal.addEventListener('close', () => stopTaskLogRefresh());
+  els.copySubscriptionLogButton.addEventListener('click', () => copySubscriptionLog());
+  els.openSubscriptionLogPageButton.addEventListener('click', () => openCurrentSubscriptionLogPage());
+  els.subscriptionLogModal.addEventListener('close', () => stopSubscriptionLogRefresh());
 
   els.enableStartupButton.addEventListener('click', () => updateStartup(() => api.enableStartup()));
   els.disableStartupButton.addEventListener('click', () => updateStartup(() => api.disableStartup()));
@@ -263,6 +310,11 @@ async function refreshTasksAndRuns() {
   ]);
   state.tasks = tasks.items || [];
   state.runs = runs.items || [];
+}
+
+async function refreshTasksOnly() {
+  const tasks = await api.listTasks();
+  state.tasks = tasks.items || [];
 }
 
 async function refreshQinglongData() {
@@ -410,23 +462,18 @@ function renderTasks() {
     </table>
   `;
 
-  document.getElementById('selectAllTasksInput').addEventListener('change', (event) => {
-    pageRows.forEach((task) => toggleSet(state.selectedTaskIds, task.id, event.target.checked));
-    renderTasks();
-  });
-  document.querySelectorAll('[data-task-sort]').forEach((button) => {
-    button.addEventListener('click', () => changeTaskSort(button.dataset.taskSort));
-  });
-  bindTaskRowEvents();
   updateTaskButtons();
 }
 
 function renderTaskRow(task) {
   const selected = state.selectedTaskIds.has(task.id);
-  const rowClass = [selected ? 'selected' : '', task.pinned ? 'pinned-row' : ''].filter(Boolean).join(' ');
-  const status = task.statusInfo;
+  const isMutating = state.taskMutatingIds.has(task.id);
+  const rowClass = [selected ? 'selected' : '', task.pinned ? 'pinned-row' : '', isMutating ? 'mutating-row' : ''].filter(Boolean).join(' ');
+  const status = isMutating
+    ? { value: 'mutating', label: '处理中', className: 'amber' }
+    : task.statusInfo;
   const isLaunching = state.launchingTaskIds.has(task.id);
-  const isBusy = isLaunching || status.value === 'running';
+  const isBusy = isLaunching || task.statusInfo.value === 'running';
   return `
     <tr class="${rowClass}" data-task-row="${escapeAttr(task.id)}">
       <td class="check-col"><input type="checkbox" data-task-check="${escapeAttr(task.id)}" ${selected ? 'checked' : ''}></td>
@@ -442,59 +489,92 @@ function renderTaskRow(task) {
       <td>${renderLabels(task.labels)}</td>
       <td>
         <div class="row-actions">
-          ${isBusy ? `<button class="link-button red" data-stop-task="${escapeAttr(task.id)}">${isLaunching ? '启动中' : '停止'}</button>` : `<button class="link-button" data-run-task="${escapeAttr(task.id)}">运行</button>`}
+          ${isBusy ? `<button class="link-button red" data-stop-task="${escapeAttr(task.id)}">${isLaunching ? '启动中' : '停止'}</button>` : `<button class="link-button" data-run-task="${escapeAttr(task.id)}" ${isMutating ? 'disabled' : ''}>运行</button>`}
           <button class="link-button" data-log-task="${escapeAttr(task.id)}" ${task.latestRun ? '' : 'disabled'}>日志</button>
-          <button class="link-button menu-trigger" data-more-task="${escapeAttr(task.id)}">更多</button>
+          <button class="link-button menu-trigger" data-more-task="${escapeAttr(task.id)}" ${isMutating ? 'disabled' : ''}>更多</button>
         </div>
       </td>
     </tr>
   `;
 }
 
-function bindTaskRowEvents() {
-  document.querySelectorAll('[data-task-check]').forEach((checkbox) => {
-    checkbox.addEventListener('click', (event) => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      toggleSet(state.selectedTaskIds, checkbox.dataset.taskCheck, checkbox.checked);
-      renderTasks();
-    });
-  });
-  document.querySelectorAll('[data-task-row]').forEach((row) => {
-    row.addEventListener('click', (event) => {
-      if (event.target.closest('button,input')) return;
-      const id = row.dataset.taskRow;
-      toggleSet(state.selectedTaskIds, id, !state.selectedTaskIds.has(id));
-      renderTasks();
-    });
-    row.addEventListener('dblclick', (event) => {
-      if (event.target.closest('button,input')) return;
-      openTaskDetail(row.dataset.taskRow);
-    });
-  });
-  document.querySelectorAll('[data-detail-task]').forEach((button) => button.addEventListener('click', (event) => {
+function handleTaskTableClick(event) {
+  const sortButton = event.target.closest('[data-task-sort]');
+  if (sortButton) {
     event.stopPropagation();
-    openTaskDetail(button.dataset.detailTask);
-  }));
-  document.querySelectorAll('[data-open-task-script]').forEach((button) => button.addEventListener('click', async (event) => {
+    changeTaskSort(sortButton.dataset.taskSort);
+    return;
+  }
+
+  const detailButton = event.target.closest('[data-detail-task]');
+  if (detailButton) {
     event.stopPropagation();
-    await openTaskScript(button.dataset.openTaskScript);
-  }));
-  document.querySelectorAll('[data-run-task]').forEach((button) => button.addEventListener('click', (event) => {
+    openTaskDetail(detailButton.dataset.detailTask);
+    return;
+  }
+
+  const scriptButton = event.target.closest('[data-open-task-script]');
+  if (scriptButton) {
     event.stopPropagation();
-    runTask(button.dataset.runTask);
-  }));
-  document.querySelectorAll('[data-stop-task]').forEach((button) => button.addEventListener('click', (event) => {
+    openTaskScript(scriptButton.dataset.openTaskScript);
+    return;
+  }
+
+  const runButton = event.target.closest('[data-run-task]');
+  if (runButton) {
     event.stopPropagation();
-    stopTask(button.dataset.stopTask);
-  }));
-  document.querySelectorAll('[data-log-task]').forEach((button) => button.addEventListener('click', (event) => {
+    runTask(runButton.dataset.runTask);
+    return;
+  }
+
+  const stopButton = event.target.closest('[data-stop-task]');
+  if (stopButton) {
     event.stopPropagation();
-    showTaskLog(button.dataset.logTask);
-  }));
-  document.querySelectorAll('[data-more-task]').forEach((button) => button.addEventListener('click', (event) => {
+    stopTask(stopButton.dataset.stopTask);
+    return;
+  }
+
+  const logButton = event.target.closest('[data-log-task]');
+  if (logButton) {
     event.stopPropagation();
-    openTaskMoreMenu(button.dataset.moreTask, button);
-  }));
+    showTaskLog(logButton.dataset.logTask);
+    return;
+  }
+
+  const moreButton = event.target.closest('[data-more-task]');
+  if (moreButton) {
+    event.stopPropagation();
+    openTaskMoreMenu(moreButton.dataset.moreTask, moreButton);
+    return;
+  }
+
+  const row = event.target.closest('[data-task-row]');
+  if (row && !event.target.closest('button,input')) {
+    const id = row.dataset.taskRow;
+    toggleSet(state.selectedTaskIds, id, !state.selectedTaskIds.has(id));
+    renderTasks();
+  }
+}
+
+function handleTaskTableChange(event) {
+  if (event.target.id === 'selectAllTasksInput') {
+    state.taskRows.forEach((task) => toggleSet(state.selectedTaskIds, task.id, event.target.checked));
+    renderTasks();
+    return;
+  }
+
+  const checkbox = event.target.closest('[data-task-check]');
+  if (checkbox) {
+    toggleSet(state.selectedTaskIds, checkbox.dataset.taskCheck, checkbox.checked);
+    renderTasks();
+  }
+}
+
+function handleTaskTableDblClick(event) {
+  const row = event.target.closest('[data-task-row]');
+  if (row && !event.target.closest('button,input')) {
+    openTaskDetail(row.dataset.taskRow);
+  }
 }
 
 function enrichTask(task) {
@@ -589,8 +669,11 @@ function compareTaskField(a, b, field) {
 
 function renderSortHeader(field, label) {
   const active = state.taskSort?.field === field;
-  const mark = active ? (state.taskSort.direction === 'ASC' ? '↑' : '↓') : '';
-  return `<button class="sort-button ${active ? 'active' : ''}" data-task-sort="${escapeAttr(field)}">${escapeHtml(label)} ${mark}</button>`;
+  const mark = active ? (state.taskSort.direction === 'ASC' ? '↑' : '↓') : '↕';
+  const title = active
+    ? `${label}，当前${state.taskSort.direction === 'ASC' ? '升序' : '降序'}，点击切换排序`
+    : `${label}，点击排序`;
+  return `<button class="sort-button ${active ? 'active' : ''}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}" data-task-sort="${escapeAttr(field)}"><span>${escapeHtml(label)}</span><span class="sort-icon" aria-hidden="true">${mark}</span></button>`;
 }
 
 async function changeTaskSort(field) {
@@ -615,14 +698,15 @@ function renderTaskViews() {
   els.taskViewTabs.innerHTML = views.map((view) => `
     <button class="view-tab ${view.id === activeId ? 'active' : ''}" data-task-view="${escapeAttr(view.id)}">${escapeHtml(view.name)}</button>
   `).join('');
-  document.querySelectorAll('[data-task-view]').forEach((button) => {
-    button.addEventListener('click', async () => {
-      state.selectedTaskIds.clear();
-      state.taskPage = 1;
-      await saveCrontabSettings({ activeViewId: button.dataset.taskView });
-      renderTasks();
-    });
-  });
+}
+
+async function handleTaskViewTabsClick(event) {
+  const button = event.target.closest('[data-task-view]');
+  if (!button) return;
+  state.selectedTaskIds.clear();
+  state.taskPage = 1;
+  await saveCrontabSettings({ activeViewId: button.dataset.taskView });
+  renderTasks();
 }
 
 function getCrontabViews() {
@@ -666,13 +750,28 @@ async function handleTaskSubmit(event) {
   event.preventDefault();
   try {
     const input = readTaskForm();
-    if (input.taskId) await api.updateTask(input);
-    else await api.createTask(input);
+    const scriptPaths = input.scriptPaths || [];
+    delete input.scriptPaths;
+    if (input.taskId) {
+      await api.updateTask(input);
+    } else if (scriptPaths.length > 1) {
+      for (const scriptPath of scriptPaths) {
+        await api.createTask({
+          ...input,
+          name: createTaskNameForScript(input.name, scriptPath, scriptPaths.length),
+          scriptPath,
+          scriptContent: undefined
+        });
+      }
+    } else {
+      if (scriptPaths.length === 1) input.scriptPath = scriptPaths[0];
+      await api.createTask(input);
+    }
     els.taskModal.close();
     await refreshTasksAndRuns();
     renderMetrics();
     renderTasks();
-    toast(input.taskId ? '任务已更新' : '任务已保存');
+    toast(input.taskId ? '任务已更新' : scriptPaths.length > 1 ? `已创建 ${scriptPaths.length} 个任务` : '任务已保存');
   } catch (error) {
     toast(formatError(error));
   }
@@ -680,11 +779,22 @@ async function handleTaskSubmit(event) {
 
 function readTaskForm() {
   const scheduleType = els.taskScheduleTypeInput.value;
+  const source = els.taskScriptSourceInput.value;
+  const scriptPaths = source === 'existing' ? normalizeSelectedTaskScriptPaths() : [];
+  if (source === 'existing' && !scriptPaths.length) {
+    throw new Error('请选择至少一个已有脚本，或切换为“填写新脚本内容”');
+  }
+  const scriptContent = source === 'inline' ? readValue('taskScriptContentInput') : '';
+  if (source === 'inline' && !scriptContent) {
+    throw new Error('请填写脚本内容，或切换为“选择已有脚本”');
+  }
+
   return {
     taskId: els.taskIdInput.value || undefined,
     name: readValue('taskNameInput'),
-    scriptPath: readValue('taskScriptPathInput') || undefined,
-    scriptContent: readValue('taskScriptContentInput') || undefined,
+    scriptPath: source === 'inline' ? readValue('taskScriptPathInput') || undefined : scriptPaths[0],
+    scriptPaths,
+    scriptContent: scriptContent || undefined,
     cronExpression: scheduleType === 'boot' ? '@boot' : scheduleType === 'once' ? '@once' : readValue('taskCronInput') || undefined,
     cwd: readValue('taskCwdInput') || 'data',
     args: readLines('taskArgsInput'),
@@ -709,11 +819,14 @@ function openTaskModal(task, options = {}) {
   els.taskModalTitle.textContent = isEdit ? '编辑任务' : cloneMode ? '复制任务' : '新建定时任务';
   els.taskIdInput.value = isEdit ? task.id : '';
   els.taskNameInput.value = cloneMode ? `${task.name} - 副本` : task?.name || '我的脚本任务';
+  state.taskFormScriptPaths = cloneMode ? [] : task?.scriptPath ? [task.scriptPath] : [];
+  state.taskScriptPickerMulti = !isEdit;
+  els.taskScriptSourceInput.value = task?.scriptContent ? 'inline' : 'existing';
   const scheduleType = task?.cronExpression === '@once' ? 'once' : task?.cronExpression === '@boot' ? 'boot' : 'normal';
   els.taskScheduleTypeInput.value = scheduleType;
   els.taskCronInput.value = scheduleType === 'normal' ? task?.cronExpression || '*/5 * * * *' : '';
   els.taskInstanceModeInput.value = task?.allowMultipleInstances ? 'multiple' : 'single';
-  els.taskScriptPathInput.value = cloneMode ? '' : task?.scriptPath || '';
+  updateTaskScriptPathInput();
   els.taskScriptContentInput.value = task?.scriptContent || defaultTaskScript();
   els.taskArgsInput.value = (task?.args || []).join('\n');
   els.taskParamsInput.value = JSON.stringify(task?.params || { 来源: '定时任务' }, null, 2);
@@ -728,6 +841,7 @@ function openTaskModal(task, options = {}) {
   els.taskAfterInput.value = task?.afterScript || '';
   els.taskEnabledInput.checked = task?.enabled ?? true;
   syncScheduleTypeFields();
+  syncTaskScriptSourceFields();
   els.taskModal.showModal();
   els.taskNameInput.focus();
 }
@@ -744,6 +858,240 @@ function syncScheduleTypeFields() {
   const isNormal = els.taskScheduleTypeInput.value === 'normal';
   els.taskCronInput.disabled = !isNormal;
   els.taskExtraSchedulesInput.disabled = !isNormal;
+}
+
+function syncTaskScriptSourceFields() {
+  const source = els.taskScriptSourceInput.value;
+  const isExisting = source === 'existing';
+  els.chooseTaskScriptButton.hidden = !isExisting;
+  els.taskScriptPathInput.readOnly = isExisting;
+  els.taskScriptPathLabel.textContent = isExisting ? '脚本路径' : '保存路径，可留空';
+  els.taskScriptPathInput.placeholder = isExisting
+    ? '点击选择 data/scripts 下的脚本，可多选批量创建任务'
+    : '留空自动保存到 data/scripts/tasks，也可填 data/scripts/custom.js';
+  els.taskScriptPathHint.textContent = isExisting
+    ? '选择已有脚本时，只保存路径，不会写入脚本内容；多选会批量创建任务。'
+    : '填写新脚本内容时，会写入新脚本文件；如果填写保存路径，将写入该路径。';
+  els.taskScriptContentField.hidden = isExisting;
+  if (!isExisting) {
+    state.taskFormScriptPaths = [];
+    updateTaskScriptPathInput();
+  }
+}
+
+function normalizeSelectedTaskScriptPaths() {
+  if (state.taskFormScriptPaths.length) return state.taskFormScriptPaths;
+  return readValue('taskScriptPathInput')
+    .split(/\r?\n|;|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function updateTaskScriptPathInput() {
+  els.taskScriptPathInput.value = state.taskFormScriptPaths.join('\n');
+  if (els.taskScriptSourceInput?.value === 'existing') {
+    const count = state.taskFormScriptPaths.length;
+    els.taskScriptPathHint.textContent = count > 1
+      ? `已选择 ${count} 个脚本，保存后会批量创建 ${count} 个任务。`
+      : '选择已有脚本时，只保存路径，不会写入脚本内容；多选会批量创建任务。';
+  }
+}
+
+function createTaskNameForScript(baseName, scriptPath, count) {
+  const scriptName = scriptPath.split('/').pop()?.replace(/\.(cjs|mjs|js)$/i, '') || '脚本任务';
+  const trimmed = String(baseName || '').trim();
+  if (!trimmed || trimmed === '我的脚本任务' || count > 1) return scriptName;
+  return trimmed;
+}
+
+async function openTaskScriptPicker() {
+  if (els.taskScriptSourceInput.value !== 'existing') return;
+  try {
+    if (!state.scripts.length) {
+      const scripts = await api.listScripts();
+      state.scripts = scripts.items || [];
+    }
+    state.taskScriptPickerSelectedPaths = new Set(state.taskFormScriptPaths);
+    state.taskScriptPickerExpandedDirs = new Set(['data/scripts']);
+    state.taskScriptPickerVisibleTree = undefined;
+    state.taskScriptPickerLastKeyword = '';
+    state.taskFormScriptPaths.forEach((scriptPath) => expandScriptParents(scriptPath, state.taskScriptPickerExpandedDirs));
+    els.taskScriptPickerSearchInput.value = '';
+    els.taskScriptPickerTitle.textContent = state.taskScriptPickerMulti ? '选择脚本' : '选择一个脚本';
+    els.taskScriptPickerHint.textContent = state.taskScriptPickerMulti
+      ? '可多选脚本，保存后会为每个脚本创建一个任务。'
+      : '编辑任务时只能选择一个脚本。';
+    renderTaskScriptPicker();
+    els.taskScriptPickerModal.showModal();
+    els.taskScriptPickerSearchInput.focus();
+  } catch (error) {
+    toast(formatError(error));
+  }
+}
+
+function renderTaskScriptPicker() {
+  const keyword = els.taskScriptPickerSearchInput.value.trim().toLowerCase();
+  const keywordChanged = keyword !== state.taskScriptPickerLastKeyword;
+  state.taskScriptPickerLastKeyword = keyword;
+  const rows = state.scripts
+    .filter((item) => SCRIPT_FILE_EXTENSIONS.some((ext) => item.path.toLowerCase().endsWith(ext)))
+    .filter((item) => {
+      if (!keyword) return true;
+      return item.path.toLowerCase().includes(keyword) || item.name.toLowerCase().includes(keyword);
+    });
+
+  els.taskScriptPickerSelectionText.textContent = `已选择 ${state.taskScriptPickerSelectedPaths.size} 个脚本`;
+  els.clearTaskScriptPickerButton.disabled = state.taskScriptPickerSelectedPaths.size === 0;
+  els.confirmTaskScriptPickerButton.disabled = state.taskScriptPickerSelectedPaths.size === 0;
+  if (!rows.length) {
+    state.taskScriptPickerVisibleTree = undefined;
+    els.taskScriptPickerList.innerHTML = '<div class="empty">暂无可选脚本，请先在脚本管理或订阅管理中保存脚本。</div>';
+    return;
+  }
+
+  const tree = buildScriptTree(rows);
+  state.taskScriptPickerVisibleTree = tree;
+  if (keyword && keywordChanged) {
+    for (const dirPath of collectScriptDirPaths(tree)) {
+      state.taskScriptPickerExpandedDirs.add(dirPath);
+    }
+  }
+  const expandedDirs = state.taskScriptPickerExpandedDirs;
+  syncVisibleScriptDirectories(tree, expandedDirs);
+  els.taskScriptPickerList.innerHTML = `<div class="script-tree script-picker-tree">${renderTaskScriptPickerTreeChildren(tree, 0, expandedDirs)}</div>`;
+  els.taskScriptPickerList.querySelectorAll('[data-task-script-picker-dir-check]').forEach((checkbox) => {
+    checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
+  });
+}
+
+function confirmTaskScriptPicker() {
+  const selected = [...state.taskScriptPickerSelectedPaths];
+  if (!selected.length) {
+    toast('请先选择脚本');
+    return;
+  }
+  state.taskFormScriptPaths = state.taskScriptPickerMulti ? selected : selected.slice(0, 1);
+  updateTaskScriptPathInput();
+  els.taskScriptPickerModal.close();
+}
+
+function scheduleTaskScriptPickerRender() {
+  if (taskScriptPickerRenderFrame) cancelAnimationFrame(taskScriptPickerRenderFrame);
+  taskScriptPickerRenderFrame = requestAnimationFrame(() => {
+    taskScriptPickerRenderFrame = undefined;
+    renderTaskScriptPicker();
+  });
+}
+
+function renderTaskScriptPickerTreeChildren(node, depth, expandedDirs) {
+  const dirs = [...node.dirs.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  const files = [...node.files].toSorted((a, b) => a.name.localeCompare(b.name));
+  return [
+    ...dirs.map((dir) => renderTaskScriptPickerDirectory(dir, depth, expandedDirs)),
+    ...files.map((file) => renderTaskScriptPickerFile(file, depth))
+  ].join('');
+}
+
+function renderTaskScriptPickerDirectory(node, depth, expandedDirs) {
+  const expanded = expandedDirs.has(node.path);
+  const paths = collectScriptPaths(node);
+  const selectedCount = paths.filter((scriptPath) => state.taskScriptPickerSelectedPaths.has(scriptPath)).length;
+  const checked = paths.length > 0 && selectedCount === paths.length;
+  const indeterminate = selectedCount > 0 && !checked;
+  return `
+    <div class="script-tree-node">
+      <div class="script-tree-row script-tree-dir" style="--depth:${depth}" data-task-script-picker-dir-row="${escapeAttr(node.path)}">
+        <button class="script-tree-toggle" type="button" data-task-script-picker-dir-toggle="${escapeAttr(node.path)}">${expanded ? '▾' : '▸'}</button>
+        <input type="checkbox" data-task-script-picker-dir-check="${escapeAttr(node.path)}" data-indeterminate="${indeterminate}" ${checked ? 'checked' : ''} ${state.taskScriptPickerMulti ? '' : 'disabled'}>
+        <span class="script-tree-name">
+          <strong>${escapeHtml(node.name)}</strong>
+          <small>${paths.length} 个脚本</small>
+        </span>
+      </div>
+      ${expanded ? `<div class="script-tree-children">${renderTaskScriptPickerTreeChildren(node, depth + 1, expandedDirs)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderTaskScriptPickerFile(item, depth) {
+  const selected = state.taskScriptPickerSelectedPaths.has(item.path);
+  const inputType = state.taskScriptPickerMulti ? 'checkbox' : 'radio';
+  return `
+    <div class="file-item script-file-item ${selected ? 'selected' : ''}" style="--depth:${depth}" data-task-script-picker-file-row="${escapeAttr(item.path)}">
+      <input type="${inputType}" name="taskScriptPickerFile" data-task-script-picker-file="${escapeAttr(item.path)}" ${selected ? 'checked' : ''}>
+      <span class="script-file-meta">
+        <strong title="${escapeAttr(item.path)}">${escapeHtml(item.name)}</strong>
+        <small>${escapeHtml(item.path)}</small>
+      </span>
+      <span class="script-file-size">${escapeHtml(formatBytes(item.size))}</span>
+    </div>
+  `;
+}
+
+function handleTaskScriptPickerClick(event) {
+  const toggle = event.target.closest('[data-task-script-picker-dir-toggle]');
+  if (toggle) {
+    event.stopPropagation();
+    toggleTaskScriptPickerDirectory(toggle.dataset.taskScriptPickerDirToggle);
+    return;
+  }
+
+  const dirRow = event.target.closest('[data-task-script-picker-dir-row]');
+  if (dirRow && !event.target.closest('input,button')) {
+    toggleTaskScriptPickerDirectory(dirRow.dataset.taskScriptPickerDirRow);
+    return;
+  }
+
+  const fileRow = event.target.closest('[data-task-script-picker-file-row]');
+  if (fileRow && !event.target.closest('input')) {
+    const scriptPath = fileRow.dataset.taskScriptPickerFileRow;
+    setTaskScriptPickerFileSelected(scriptPath, !state.taskScriptPickerSelectedPaths.has(scriptPath));
+    renderTaskScriptPicker();
+  }
+}
+
+function handleTaskScriptPickerChange(event) {
+  const fileInput = event.target.closest('[data-task-script-picker-file]');
+  if (fileInput) {
+    setTaskScriptPickerFileSelected(fileInput.dataset.taskScriptPickerFile, fileInput.checked);
+    renderTaskScriptPicker();
+    return;
+  }
+
+  const dirInput = event.target.closest('[data-task-script-picker-dir-check]');
+  if (dirInput) {
+    toggleTaskScriptPickerDirectorySelection(dirInput.dataset.taskScriptPickerDirCheck, dirInput.checked);
+    renderTaskScriptPicker();
+  }
+}
+
+function toggleTaskScriptPickerDirectory(dirPath) {
+  if (state.taskScriptPickerExpandedDirs.has(dirPath)) state.taskScriptPickerExpandedDirs.delete(dirPath);
+  else state.taskScriptPickerExpandedDirs.add(dirPath);
+  renderTaskScriptPicker();
+}
+
+function setTaskScriptPickerFileSelected(scriptPath, selected) {
+  if (selected) {
+    if (!state.taskScriptPickerMulti) state.taskScriptPickerSelectedPaths.clear();
+    state.taskScriptPickerSelectedPaths.add(scriptPath);
+  } else {
+    state.taskScriptPickerSelectedPaths.delete(scriptPath);
+  }
+}
+
+function toggleTaskScriptPickerDirectorySelection(dirPath, checked) {
+  if (!state.taskScriptPickerMulti) return;
+  const visibleNode = findScriptTreeNode(state.taskScriptPickerVisibleTree, dirPath);
+  const paths = visibleNode
+    ? collectScriptPaths(visibleNode)
+    : state.scripts
+      .map((item) => item.path)
+      .filter((scriptPath) => scriptPath.startsWith(`${dirPath}/`))
+      .filter((scriptPath) => SCRIPT_FILE_EXTENSIONS.some((ext) => scriptPath.toLowerCase().endsWith(ext)));
+  for (const scriptPath of paths) {
+    setTaskScriptPickerFileSelected(scriptPath, checked);
+  }
 }
 
 async function runTask(taskId) {
@@ -771,8 +1119,7 @@ async function runTask(taskId) {
     if (state.detailTaskId === taskId && els.taskDetailModal.open) {
       await refreshTaskDetail(taskId);
     }
-    await showPage('log');
-    await showRunLog(runId);
+    if (runId) await openTaskLogModal(runId, taskId);
     toast('任务已开始运行，日志正在实时刷新');
   } catch (error) {
     toast(formatError(error));
@@ -827,8 +1174,7 @@ async function batchRunTasks() {
     renderTasks();
     renderRuns();
     if (lastRunId) {
-      await showPage('log');
-      await showRunLog(lastRunId);
+      await openTaskLogModal(lastRunId);
     }
     toast(`已启动 ${ids.length} 个任务，日志正在实时刷新`);
   } catch (error) {
@@ -855,23 +1201,53 @@ async function batchStopTasks() {
   toast(`已停止 ${ids.length} 个任务`);
 }
 
+function snapshotTasks(ids) {
+  const idSet = new Set(ids);
+  return state.tasks.filter((task) => idSet.has(task.id)).map((task) => ({ ...task }));
+}
+
+function restoreTaskSnapshots(snapshots) {
+  const snapshotMap = new Map(snapshots.map((task) => [task.id, task]));
+  state.tasks = state.tasks.map((task) => snapshotMap.get(task.id) || task);
+}
+
+function patchTaskRows(ids, patch) {
+  const idSet = new Set(ids);
+  const now = new Date().toISOString();
+  state.tasks = state.tasks.map((task) => idSet.has(task.id)
+    ? { ...task, ...patch, updatedAt: now }
+    : task);
+}
+
+function setTaskMutating(ids, mutating) {
+  for (const id of ids) {
+    if (mutating) state.taskMutatingIds.add(id);
+    else state.taskMutatingIds.delete(id);
+  }
+}
+
 async function setTaskEnabled(taskId, enabled) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
-  if (!await confirmAction({
-    title: `${enabled ? '启用' : '禁用'}定时任务`,
-    message: `确认${enabled ? '启用' : '禁用'}「${task.name}」吗？`,
-    okText: enabled ? '启用' : '禁用'
-  })) return;
+  const snapshots = snapshotTasks([taskId]);
+  patchTaskRows([taskId], { enabled });
+  setTaskMutating([taskId], true);
+  renderTasks();
+  if (state.detailTaskId === taskId && els.taskDetailModal.open) {
+    await refreshTaskDetail(taskId);
+  }
   try {
     await api.setTaskEnabled(taskId, enabled);
-    await refreshTasksAndRuns();
+    setTaskMutating([taskId], false);
     renderTasks();
     if (state.detailTaskId === taskId && els.taskDetailModal.open) {
       await refreshTaskDetail(taskId);
     }
     toast(enabled ? '任务已启用' : '任务已禁用');
   } catch (error) {
+    restoreTaskSnapshots(snapshots);
+    setTaskMutating([taskId], false);
+    renderTasks();
     toast(formatError(error));
   }
 }
@@ -879,36 +1255,48 @@ async function setTaskEnabled(taskId, enabled) {
 async function batchSetTasksEnabled(enabled) {
   const ids = [...state.selectedTaskIds];
   if (!ids.length) return;
-  if (!await confirmAction({
-    title: `${enabled ? '批量启用' : '批量禁用'}任务`,
-    message: `确认${enabled ? '启用' : '禁用'}选中的 ${ids.length} 个定时任务吗？`,
-    okText: enabled ? '批量启用' : '批量禁用'
-  })) return;
-  for (const id of ids) {
-    await api.setTaskEnabled(id, enabled);
-  }
-  await refreshTasksAndRuns();
+  const snapshots = snapshotTasks(ids);
+  patchTaskRows(ids, { enabled });
+  setTaskMutating(ids, true);
   renderTasks();
-  toast(enabled ? `已启用 ${ids.length} 个任务` : `已禁用 ${ids.length} 个任务`);
+  try {
+    for (const id of ids) {
+      await api.setTaskEnabled(id, enabled);
+    }
+    setTaskMutating(ids, false);
+    renderTasks();
+    toast(enabled ? `已启用 ${ids.length} 个任务` : `已禁用 ${ids.length} 个任务`);
+  } catch (error) {
+    restoreTaskSnapshots(snapshots);
+    setTaskMutating(ids, false);
+    await refreshTasksOnly().catch(() => undefined);
+    renderTasks();
+    toast(formatError(error));
+  }
 }
 
 async function setTaskPinned(taskId, pinned) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
-  if (!await confirmAction({
-    title: `${pinned ? '置顶' : '取消置顶'}任务`,
-    message: `确认${pinned ? '置顶' : '取消置顶'}「${task.name}」吗？`,
-    okText: pinned ? '置顶' : '取消置顶'
-  })) return;
+  const snapshots = snapshotTasks([taskId]);
+  patchTaskRows([taskId], { pinned });
+  setTaskMutating([taskId], true);
+  renderTasks();
+  if (state.detailTaskId === taskId && els.taskDetailModal.open) {
+    await refreshTaskDetail(taskId);
+  }
   try {
     await api.setTaskPinned(taskId, pinned);
-    await refreshTasksAndRuns();
+    setTaskMutating([taskId], false);
     renderTasks();
     if (state.detailTaskId === taskId && els.taskDetailModal.open) {
       await refreshTaskDetail(taskId);
     }
     toast(pinned ? '任务已置顶' : '已取消置顶');
   } catch (error) {
+    restoreTaskSnapshots(snapshots);
+    setTaskMutating([taskId], false);
+    renderTasks();
     toast(formatError(error));
   }
 }
@@ -916,17 +1304,24 @@ async function setTaskPinned(taskId, pinned) {
 async function batchSetTasksPinned(pinned) {
   const ids = [...state.selectedTaskIds];
   if (!ids.length) return;
-  if (!await confirmAction({
-    title: `${pinned ? '批量置顶' : '批量取消置顶'}任务`,
-    message: `确认${pinned ? '置顶' : '取消置顶'}选中的 ${ids.length} 个定时任务吗？`,
-    okText: pinned ? '批量置顶' : '批量取消置顶'
-  })) return;
-  for (const id of ids) {
-    await api.setTaskPinned(id, pinned);
-  }
-  await refreshTasksAndRuns();
+  const snapshots = snapshotTasks(ids);
+  patchTaskRows(ids, { pinned });
+  setTaskMutating(ids, true);
   renderTasks();
-  toast(pinned ? `已置顶 ${ids.length} 个任务` : `已取消置顶 ${ids.length} 个任务`);
+  try {
+    for (const id of ids) {
+      await api.setTaskPinned(id, pinned);
+    }
+    setTaskMutating(ids, false);
+    renderTasks();
+    toast(pinned ? `已置顶 ${ids.length} 个任务` : `已取消置顶 ${ids.length} 个任务`);
+  } catch (error) {
+    restoreTaskSnapshots(snapshots);
+    setTaskMutating(ids, false);
+    await refreshTasksOnly().catch(() => undefined);
+    renderTasks();
+    toast(formatError(error));
+  }
 }
 
 async function deleteTask(taskId) {
@@ -1016,8 +1411,98 @@ async function showTaskLog(taskId) {
     toast('该任务暂无日志');
     return;
   }
-  await showRunLog(run.id);
+  await openTaskLogModal(run.id, taskId);
+}
+
+async function openTaskLogModal(runId, taskId) {
+  stopTaskLogRefresh();
+  state.currentTaskLogRunId = runId;
+  state.currentTaskLogTaskId = taskId || '';
+  if (!els.taskLogModal.open) {
+    els.taskLogModal.showModal();
+  }
+  const run = await renderTaskLogModal(runId);
+  if (run?.status === 'running') startTaskLogRefresh(runId);
+}
+
+async function renderTaskLogModal(runId, options = {}) {
+  try {
+    const shouldAutoScroll = isTaskLogViewerNearBottom();
+    const [run, log] = await Promise.all([
+      api.getRun(runId),
+      api.getRunLog(runId, 'combined')
+    ]);
+    upsertRunRecord(run);
+    const task = state.tasks.find((item) => item.id === (run.taskId || state.currentTaskLogTaskId));
+    const display = getRunDisplayInfo(run, task);
+    const statusSuffix = run.status === 'running' ? ' · 实时刷新中' : '';
+    els.taskLogTitle.textContent = `任务日志：${display.title}`;
+    els.taskLogMeta.textContent = `${formatStatus(run.status)}${statusSuffix} · ${formatDateTime(run.startedAt)} · ${formatDuration(run.durationMs)} · ${formatTrigger(run.trigger)} · ${display.subtitle}`;
+    const text = log.text || (run.status === 'running' ? '运行中，等待脚本输出...' : '日志为空');
+    const changed = els.taskLogViewer.textContent !== text;
+    if (changed) {
+      els.taskLogViewer.textContent = text;
+      if (shouldAutoScroll || run.status === 'running') {
+        els.taskLogViewer.scrollTop = els.taskLogViewer.scrollHeight;
+      }
+    }
+    renderRunsIfVisible();
+    if (run.status !== 'running') {
+      await refreshTasksAndRuns();
+      renderMetrics();
+      renderTasks();
+      renderRunsIfVisible();
+    }
+    return run;
+  } catch (error) {
+    if (!options.silent) toast(formatError(error));
+    return undefined;
+  }
+}
+
+function startTaskLogRefresh(runId) {
+  stopTaskLogRefresh();
+  taskLogRefreshTimer = setInterval(async () => {
+    if (state.currentTaskLogRunId !== runId || !els.taskLogModal.open) {
+      stopTaskLogRefresh();
+      return;
+    }
+    const run = await renderTaskLogModal(runId, { silent: true });
+    if (!run || run.status !== 'running') {
+      stopTaskLogRefresh();
+    }
+  }, 1000);
+}
+
+function stopTaskLogRefresh() {
+  if (taskLogRefreshTimer) {
+    clearInterval(taskLogRefreshTimer);
+    taskLogRefreshTimer = undefined;
+  }
+  if (!els.taskLogModal?.open) {
+    state.currentTaskLogRunId = '';
+    state.currentTaskLogTaskId = '';
+  }
+}
+
+async function copyTaskLog() {
+  await api.copyText(els.taskLogViewer.textContent || '');
+  toast('任务日志已复制到剪贴板');
+}
+
+async function openCurrentTaskLogPage() {
+  const runId = state.currentTaskLogRunId;
+  if (!runId) return;
+  els.taskLogModal.close();
+  await refreshTasksAndRuns();
+  renderRuns();
   await showPage('log');
+  await showRunLog(runId);
+}
+
+function isTaskLogViewerNearBottom() {
+  if (!els.taskLogViewer) return true;
+  return els.taskLogViewer.scrollHeight - els.taskLogViewer.scrollTop - els.taskLogViewer.clientHeight < 60;
 }
 
 async function openTaskDetail(taskId) {
@@ -1140,7 +1625,7 @@ function renderViewManageTable() {
           <th style="width: 90px">类型</th>
           <th style="width: 90px">显示</th>
           <th>筛选</th>
-          <th style="width: 160px">操作</th>
+          <th style="width: 240px">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -1162,12 +1647,26 @@ function renderViewManageTable() {
       </tbody>
     </table>
   `;
-  document.querySelectorAll('[data-edit-view]').forEach((button) => button.addEventListener('click', () => {
-    const view = getCrontabViews().find((item) => item.id === button.dataset.editView);
+}
+
+function handleViewManageClick(event) {
+  const editButton = event.target.closest('[data-edit-view]');
+  if (editButton) {
+    const view = getCrontabViews().find((item) => item.id === editButton.dataset.editView);
     if (view) openViewModal(view);
-  }));
-  document.querySelectorAll('[data-toggle-view]').forEach((button) => button.addEventListener('click', () => toggleView(button.dataset.toggleView)));
-  document.querySelectorAll('[data-delete-view]').forEach((button) => button.addEventListener('click', () => deleteView(button.dataset.deleteView)));
+    return;
+  }
+
+  const toggleButton = event.target.closest('[data-toggle-view]');
+  if (toggleButton) {
+    toggleView(toggleButton.dataset.toggleView);
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-view]');
+  if (deleteButton) {
+    deleteView(deleteButton.dataset.deleteView);
+  }
 }
 
 function openViewModal(view) {
@@ -1353,7 +1852,7 @@ function renderEnvs() {
             <td class="check-col"><input type="checkbox" data-env-check="${escapeAttr(item.id)}" ${state.selectedEnvIds.has(item.id) ? 'checked' : ''}></td>
             <td class="name-col">${escapeHtml(item.name)}</td>
             <td class="path-col" title="${escapeAttr(item.value)}">${escapeHtml(maskValue(item.value))}</td>
-            <td>${item.status === 'enabled' ? '<span class="tag green">启用</span>' : '<span class="tag red">禁用</span>'}</td>
+            <td><div class="tag-stack">${item.status === 'enabled' ? '<span class="tag green">启用</span>' : '<span class="tag red">禁用</span>'}${item.autoCreateTasks ? '<span class="tag blue">自动建任务</span>' : ''}</div></td>
             <td class="muted">${escapeHtml(item.remarks || '-')}</td>
             <td>${escapeHtml(formatDateTime(item.updatedAt))}</td>
             <td><div class="row-actions"><button class="link-button" data-edit-env="${escapeAttr(item.id)}">编辑</button><button class="link-button red" data-delete-env="${escapeAttr(item.id)}">删除</button></div></td>
@@ -1362,30 +1861,35 @@ function renderEnvs() {
       </tbody>
     </table>
   `;
+  updateEnvButtons();
+}
 
-  document.getElementById('selectAllEnvsInput').addEventListener('change', (event) => {
-    rows.forEach((item) => toggleSet(state.selectedEnvIds, item.id, event.target.checked));
+function scheduleEnvRender() {
+  if (envRenderFrame) cancelAnimationFrame(envRenderFrame);
+  envRenderFrame = requestAnimationFrame(() => {
+    envRenderFrame = undefined;
     renderEnvs();
   });
-  document.querySelectorAll('[data-env-check]').forEach((checkbox) => {
-    checkbox.addEventListener('click', (event) => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      toggleSet(state.selectedEnvIds, checkbox.dataset.envCheck, checkbox.checked);
-      renderEnvs();
-    });
+}
+
+function getFilteredEnvs() {
+  const keyword = els.envSearchInput.value.trim().toLowerCase();
+  return state.envs.filter((item) => {
+    if (!keyword) return true;
+    return `${item.name} ${item.value} ${item.remarks}`.toLowerCase().includes(keyword);
   });
-  document.querySelectorAll('[data-env-row]').forEach((row) => {
-    row.addEventListener('click', (event) => {
-      if (event.target.closest('button,input')) return;
-      toggleSet(state.selectedEnvIds, row.dataset.envRow, !state.selectedEnvIds.has(row.dataset.envRow));
-      renderEnvs();
-    });
-  });
-  document.querySelectorAll('[data-edit-env]').forEach((button) => button.addEventListener('click', (event) => {
+}
+
+async function handleEnvTableClick(event) {
+  const editButton = event.target.closest('[data-edit-env]');
+  if (editButton) {
     event.stopPropagation();
-    openEnvModal(state.envs.find((item) => item.id === button.dataset.editEnv));
-  }));
-  document.querySelectorAll('[data-delete-env]').forEach((button) => button.addEventListener('click', async (event) => {
+    openEnvModal(state.envs.find((item) => item.id === editButton.dataset.editEnv));
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-env]');
+  if (deleteButton) {
     event.stopPropagation();
     if (!await confirmAction({
       title: '删除环境变量',
@@ -1393,13 +1897,37 @@ function renderEnvs() {
       okText: '删除',
       tone: 'danger'
     })) return;
-    await api.deleteEnvs([button.dataset.deleteEnv]);
-    await refreshQinglongData();
-    renderMetrics();
+    await deleteEnv(deleteButton.dataset.deleteEnv);
+    return;
+  }
+
+  const row = event.target.closest('[data-env-row]');
+  if (row && !event.target.closest('button,input')) {
+    toggleSet(state.selectedEnvIds, row.dataset.envRow, !state.selectedEnvIds.has(row.dataset.envRow));
     renderEnvs();
-    toast('变量已删除');
-  }));
-  updateEnvButtons();
+  }
+}
+
+function handleEnvTableChange(event) {
+  if (event.target.id === 'selectAllEnvsInput') {
+    getFilteredEnvs().forEach((item) => toggleSet(state.selectedEnvIds, item.id, event.target.checked));
+    renderEnvs();
+    return;
+  }
+
+  const checkbox = event.target.closest('[data-env-check]');
+  if (checkbox) {
+    toggleSet(state.selectedEnvIds, checkbox.dataset.envCheck, checkbox.checked);
+    renderEnvs();
+  }
+}
+
+async function refreshEnvs() {
+  const envs = await api.listEnvs();
+  state.envs = envs.items || [];
+  state.selectedEnvIds = keepExistingSelection(state.selectedEnvIds, state.envs.map((item) => item.id));
+  renderMetrics();
+  renderEnvs();
 }
 
 function updateEnvButtons() {
@@ -1433,9 +1961,7 @@ async function handleEnvSubmit(event) {
       status: els.envStatusInput.value
     });
     els.envModal.close();
-    await refreshQinglongData();
-    renderMetrics();
-    renderEnvs();
+    await refreshEnvs();
     toast('变量已保存');
   } catch (error) {
     toast(formatError(error));
@@ -1445,11 +1971,40 @@ async function handleEnvSubmit(event) {
 async function batchSetEnvsStatus(status) {
   const ids = [...state.selectedEnvIds];
   if (!ids.length) return;
-  await api.setEnvStatus(ids, status);
-  await refreshQinglongData();
+  const snapshots = state.envs.map((item) => ({ ...item }));
+  const now = new Date().toISOString();
+  const idSet = new Set(ids);
+  state.envs = state.envs.map((item) => idSet.has(item.id) ? { ...item, status, updatedAt: now } : item);
   renderMetrics();
   renderEnvs();
-  toast(status === 'enabled' ? `已启用 ${ids.length} 个变量` : `已禁用 ${ids.length} 个变量`);
+  try {
+    await api.setEnvStatus(ids, status);
+    await refreshEnvs();
+    toast(status === 'enabled' ? `已启用 ${ids.length} 个变量` : `已禁用 ${ids.length} 个变量`);
+  } catch (error) {
+    state.envs = snapshots;
+    renderMetrics();
+    renderEnvs();
+    toast(formatError(error));
+  }
+}
+
+async function deleteEnv(id) {
+  const snapshots = state.envs.map((item) => ({ ...item }));
+  state.envs = state.envs.filter((item) => item.id !== id);
+  state.selectedEnvIds.delete(id);
+  renderMetrics();
+  renderEnvs();
+  try {
+    await api.deleteEnvs([id]);
+    await refreshEnvs();
+    toast('变量已删除');
+  } catch (error) {
+    state.envs = snapshots;
+    renderMetrics();
+    renderEnvs();
+    toast(formatError(error));
+  }
 }
 
 async function batchDeleteEnvs() {
@@ -1461,12 +2016,22 @@ async function batchDeleteEnvs() {
     okText: '批量删除',
     tone: 'danger'
   })) return;
-  await api.deleteEnvs(ids);
+  const snapshots = state.envs.map((item) => ({ ...item }));
+  const idSet = new Set(ids);
+  state.envs = state.envs.filter((item) => !idSet.has(item.id));
   state.selectedEnvIds.clear();
-  await refreshQinglongData();
   renderMetrics();
   renderEnvs();
-  toast(`已删除 ${ids.length} 个变量`);
+  try {
+    await api.deleteEnvs(ids);
+    await refreshEnvs();
+    toast(`已删除 ${ids.length} 个变量`);
+  } catch (error) {
+    state.envs = snapshots;
+    renderMetrics();
+    renderEnvs();
+    toast(formatError(error));
+  }
 }
 
 function renderSubscriptions() {
@@ -1491,7 +2056,7 @@ function renderSubscriptions() {
           <th style="width: 120px">状态</th>
           <th style="width: 150px">最后运行</th>
           <th style="width: 220px">运行结果</th>
-          <th style="width: 190px">操作</th>
+          <th style="width: 160px">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -1511,37 +2076,33 @@ function renderSubscriptions() {
       </tbody>
     </table>
   `;
+  updateSubscriptionButtons();
+}
 
-  document.getElementById('selectAllSubscriptionsInput').addEventListener('change', (event) => {
-    rows.forEach((item) => toggleSet(state.selectedSubscriptionIds, item.id, event.target.checked));
-    renderSubscriptions();
-  });
-  document.querySelectorAll('[data-subscription-check]').forEach((checkbox) => {
-    checkbox.addEventListener('click', (event) => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      toggleSet(state.selectedSubscriptionIds, checkbox.dataset.subscriptionCheck, checkbox.checked);
-      renderSubscriptions();
-    });
-  });
-  document.querySelectorAll('[data-subscription-row]').forEach((row) => row.addEventListener('click', (event) => {
-    if (event.target.closest('button,input')) return;
-    toggleSet(state.selectedSubscriptionIds, row.dataset.subscriptionRow, !state.selectedSubscriptionIds.has(row.dataset.subscriptionRow));
-    renderSubscriptions();
-  }));
-  document.querySelectorAll('[data-run-subscription]').forEach((button) => button.addEventListener('click', async (event) => {
+async function handleSubscriptionTableClick(event) {
+  const runButton = event.target.closest('[data-run-subscription]');
+  if (runButton) {
     event.stopPropagation();
-    await runSubscription(button.dataset.runSubscription);
-  }));
-  document.querySelectorAll('[data-log-subscription]').forEach((button) => button.addEventListener('click', (event) => {
+    await runSubscription(runButton.dataset.runSubscription);
+    return;
+  }
+
+  const logButton = event.target.closest('[data-log-subscription]');
+  if (logButton) {
     event.stopPropagation();
-    const subscription = state.subscriptions.find((item) => item.id === button.dataset.logSubscription);
-    openSubscriptionLogModal(subscription, getSubscriptionLogText(subscription), subscription?.lastPulledAt ? `上次拉取：${formatDateTime(subscription.lastPulledAt)}` : '暂无拉取记录');
-  }));
-  document.querySelectorAll('[data-edit-subscription]').forEach((button) => button.addEventListener('click', (event) => {
+    await showSubscriptionLog(logButton.dataset.logSubscription);
+    return;
+  }
+
+  const editButton = event.target.closest('[data-edit-subscription]');
+  if (editButton) {
     event.stopPropagation();
-    openSubscriptionModal(state.subscriptions.find((item) => item.id === button.dataset.editSubscription));
-  }));
-  document.querySelectorAll('[data-delete-subscription]').forEach((button) => button.addEventListener('click', async (event) => {
+    openSubscriptionModal(state.subscriptions.find((item) => item.id === editButton.dataset.editSubscription));
+    return;
+  }
+
+  const deleteButton = event.target.closest('[data-delete-subscription]');
+  if (deleteButton) {
     event.stopPropagation();
     if (!await confirmAction({
       title: '删除订阅',
@@ -1549,12 +2110,29 @@ function renderSubscriptions() {
       okText: '删除',
       tone: 'danger'
     })) return;
-    await api.deleteSubscriptions([button.dataset.deleteSubscription]);
-    await refreshQinglongData();
+    await deleteSubscription(deleteButton.dataset.deleteSubscription);
+    return;
+  }
+
+  const row = event.target.closest('[data-subscription-row]');
+  if (row && !event.target.closest('button,input')) {
+    toggleSet(state.selectedSubscriptionIds, row.dataset.subscriptionRow, !state.selectedSubscriptionIds.has(row.dataset.subscriptionRow));
     renderSubscriptions();
-    toast('订阅已删除');
-  }));
-  updateSubscriptionButtons();
+  }
+}
+
+function handleSubscriptionTableChange(event) {
+  if (event.target.id === 'selectAllSubscriptionsInput') {
+    state.subscriptions.forEach((item) => toggleSet(state.selectedSubscriptionIds, item.id, event.target.checked));
+    renderSubscriptions();
+    return;
+  }
+
+  const checkbox = event.target.closest('[data-subscription-check]');
+  if (checkbox) {
+    toggleSet(state.selectedSubscriptionIds, checkbox.dataset.subscriptionCheck, checkbox.checked);
+    renderSubscriptions();
+  }
 }
 
 function updateSubscriptionButtons() {
@@ -1585,6 +2163,7 @@ function openSubscriptionModal(subscription) {
   els.subscriptionBranchInput.value = subscription?.branch || '';
   els.subscriptionScheduleInput.value = subscription?.schedule || '';
   els.subscriptionStatusInput.value = subscription?.status || 'enabled';
+  els.subscriptionAutoCreateTasksInput.checked = Boolean(subscription?.autoCreateTasks);
   els.subscriptionModal.showModal();
 }
 
@@ -1597,7 +2176,8 @@ async function handleSubscriptionSubmit(event) {
       url: readValue('subscriptionUrlInput'),
       branch: readValue('subscriptionBranchInput'),
       schedule: readValue('subscriptionScheduleInput'),
-      status: els.subscriptionStatusInput.value
+      status: els.subscriptionStatusInput.value,
+      autoCreateTasks: els.subscriptionAutoCreateTasksInput.checked
     });
     upsertSubscription(saved);
     els.subscriptionModal.close();
@@ -1608,99 +2188,274 @@ async function handleSubscriptionSubmit(event) {
   }
 }
 
-async function runSubscription(id) {
-  const name = getSubscriptionName(id);
-  const openingText = `正在拉取订阅：${name}\n\nGit 拉取中，请稍候...`;
-  openSubscriptionLogModal({ id, name }, openingText, '拉取中');
-  setSubscriptionRunStatus(`正在运行订阅：${name}`, 'info');
-  state.runningSubscriptionIds.add(id);
+async function deleteSubscription(id) {
+  const snapshots = state.subscriptions.map((item) => ({ ...item }));
+  state.subscriptions = state.subscriptions.filter((item) => item.id !== id);
+  state.selectedSubscriptionIds.delete(id);
   renderSubscriptions();
-  toast(`正在运行订阅：${name}`, { tone: 'info', persist: true });
   try {
-    const result = await api.runSubscription(id);
-    upsertSubscription(result);
+    await api.deleteSubscriptions([id]);
     await Promise.all([
       refreshSubscriptions(),
+      refreshScripts()
+    ]);
+    renderMetrics();
+    toast('订阅已删除');
+  } catch (error) {
+    state.subscriptions = snapshots;
+    renderSubscriptions();
+    toast(formatError(error));
+  }
+}
+
+async function runSubscription(id) {
+  const name = getSubscriptionName(id);
+  setSubscriptionRunStatus(`正在启动订阅：${name}`, 'info');
+  state.runningSubscriptionIds.add(id);
+  renderSubscriptions();
+  toast(`正在启动订阅：${name}`, { tone: 'info', persist: true });
+  try {
+    const result = await api.runSubscription(id, { background: true });
+    upsertSubscription(result);
+    const runId = result?.runId || result?.lastRunId;
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshTasksAndRuns()
+    ]);
+    renderRuns();
+    if (runId) {
+      await openSubscriptionLogModal(runId, id);
+      const message = `订阅已开始运行：${name}，日志弹窗正在实时刷新`;
+      setSubscriptionRunStatus(message, 'info');
+      toast(message, { tone: 'info', durationMs: 6000 });
+      watchSubscriptionRun(runId, id, name).catch((error) => {
+        setSubscriptionRunStatus(`订阅状态刷新失败：${formatError(error)}`, 'error');
+        toast(formatError(error), { tone: 'error', durationMs: 8000 });
+      });
+      return;
+    }
+
+    await Promise.all([
       refreshScripts(),
       refreshQinglongOverview()
     ]);
-    openSubscriptionLogModal(result, getSubscriptionLogText(result), result?.lastPulledAt ? `拉取完成：${formatDateTime(result.lastPulledAt)}` : '拉取完成');
     const message = formatSubscriptionRunSuccess(result, name);
     setSubscriptionRunStatus(message, 'success');
     toast(message, { tone: 'success', durationMs: 7000 });
+    state.runningSubscriptionIds.delete(id);
   } catch (error) {
-    await refreshSubscriptions().catch(() => undefined);
-    const failed = state.subscriptions.find((item) => item.id === id);
-    const logText = getSubscriptionLogText(failed) || `${openingText}\n\n拉取失败：${formatError(error)}`;
-    openSubscriptionLogModal(failed || { id, name }, logText, failed?.lastPulledAt ? `拉取失败：${formatDateTime(failed.lastPulledAt)}` : '拉取失败');
     const message = `订阅运行失败：${formatError(error)}`;
     setSubscriptionRunStatus(message, 'error');
     toast(message, { tone: 'error', durationMs: 8000 });
-  } finally {
     state.runningSubscriptionIds.delete(id);
-    renderSubscriptions();
   }
+  renderSubscriptions();
 }
 
 async function batchRunSubscriptions() {
   const ids = [...state.selectedSubscriptionIds];
   if (!ids.length) return;
-  openSubscriptionLogModal({ name: `批量运行 ${ids.length} 个订阅` }, `正在批量拉取 ${ids.length} 个订阅...\n`, '批量拉取中');
-  setSubscriptionRunStatus(`正在运行 ${ids.length} 个订阅...`, 'info');
+  setSubscriptionRunStatus(`正在启动 ${ids.length} 个订阅...`, 'info');
   ids.forEach((id) => state.runningSubscriptionIds.add(id));
   renderSubscriptions();
-  toast(`正在运行 ${ids.length} 个订阅...`, { tone: 'info', persist: true });
+  toast(`正在启动 ${ids.length} 个订阅...`, { tone: 'info', persist: true });
   const results = [];
-  const logSections = [];
   try {
     for (const id of ids) {
-      appendSubscriptionLog(`\n===== ${getSubscriptionName(id)} =====\n正在拉取...`);
-      const result = await api.runSubscription(id);
+      const result = await api.runSubscription(id, { background: true });
       results.push(result);
       upsertSubscription(result);
-      logSections.push(formatSubscriptionLogSection(result, getSubscriptionName(id)));
-      setSubscriptionLogContent(logSections.join('\n\n'));
     }
     await Promise.all([
       refreshSubscriptions(),
-      refreshScripts(),
-      refreshQinglongOverview()
+      refreshTasksAndRuns()
     ]);
-    setSubscriptionLogContent(logSections.join('\n\n') || '批量拉取完成，暂无日志');
-    els.subscriptionLogMeta.textContent = `批量拉取完成：${results.length}/${ids.length}`;
-    const summaries = results
-      .map((item) => item?.lastResult)
-      .filter(Boolean)
-      .slice(0, 2)
-      .join('；');
+    renderRuns();
     const names = results
       .map((item) => item?.name)
       .filter(Boolean)
       .slice(0, 3)
       .join('、');
-    const message = `订阅运行成功：${names || `已完成 ${results.length} 个订阅`}${summaries ? `，${summaries}` : ''}`;
-    setSubscriptionRunStatus(message, 'success');
-    toast(message, { tone: 'success', durationMs: 8000 });
+    const message = `已启动 ${results.length} 个订阅：${names || '等待运行完成'}，点击对应“日志”查看实时输出`;
+    setSubscriptionRunStatus(message, 'info');
+    toast(message, { tone: 'info', durationMs: 8000 });
+    results.forEach((result) => {
+      const runId = result?.runId || result?.lastRunId;
+      if (!runId || !result?.id) {
+        if (result?.id) state.runningSubscriptionIds.delete(result.id);
+        return;
+      }
+      if (!state.currentSubscriptionLogRunId) {
+        openSubscriptionLogModal(runId, result.id).catch((error) => {
+          toast(formatError(error), { tone: 'error', durationMs: 8000 });
+        });
+      }
+      watchSubscriptionRun(runId, result.id, result.name).catch((error) => {
+        setSubscriptionRunStatus(`订阅状态刷新失败：${formatError(error)}`, 'error');
+        toast(formatError(error), { tone: 'error', durationMs: 8000 });
+      });
+    });
+    renderSubscriptions();
   } catch (error) {
     await Promise.all([
       refreshSubscriptions(),
       refreshScripts(),
       refreshQinglongOverview()
     ]);
-    const latestSections = ids
-      .map((id) => state.subscriptions.find((item) => item.id === id))
-      .filter(Boolean)
-      .map((item) => formatSubscriptionLogSection(item, getSubscriptionName(item.id)));
-    const failureText = latestSections.length
-      ? latestSections.join('\n\n')
-      : `批量拉取失败：${formatError(error)}`;
-    setSubscriptionLogContent(failureText);
-    els.subscriptionLogMeta.textContent = '批量拉取失败';
     const message = `订阅运行失败：${formatError(error)}`;
     setSubscriptionRunStatus(message, 'error');
     toast(message, { tone: 'error', durationMs: 8000 });
-  } finally {
     ids.forEach((id) => state.runningSubscriptionIds.delete(id));
+    renderSubscriptions();
+  }
+}
+
+async function showSubscriptionLog(id) {
+  const subscription = state.subscriptions.find((item) => item.id === id);
+  const runId = subscription?.lastRunId;
+  if (!runId) {
+    toast('该订阅暂无弹窗日志，请重新运行一次订阅生成日志');
+    return;
+  }
+  await openSubscriptionLogModal(runId, id);
+}
+
+async function openSubscriptionLogModal(runId, subscriptionId) {
+  stopSubscriptionLogRefresh();
+  state.currentSubscriptionLogRunId = runId;
+  state.currentSubscriptionLogSubscriptionId = subscriptionId || '';
+  if (!els.subscriptionLogModal.open) {
+    els.subscriptionLogModal.showModal();
+  }
+  const run = await renderSubscriptionLog(runId);
+  if (run?.status === 'running') startSubscriptionLogRefresh(runId);
+}
+
+async function renderSubscriptionLog(runId, options = {}) {
+  try {
+    const shouldAutoScroll = isSubscriptionLogViewerNearBottom();
+    const [run, log] = await Promise.all([
+      api.getRun(runId),
+      api.getRunLog(runId, 'combined')
+    ]);
+    upsertRunRecord(run);
+    const subscription = state.subscriptions.find((item) => item.lastRunId === runId || item.id === state.currentSubscriptionLogSubscriptionId);
+    const statusSuffix = run.status === 'running' ? ' · 实时刷新中' : '';
+    els.subscriptionLogTitle.textContent = subscription?.name ? `订阅日志：${subscription.name}` : (run.name || '订阅日志');
+    els.subscriptionLogMeta.textContent = `${formatStatus(run.status)}${statusSuffix} · ${formatDateTime(run.startedAt)} · ${formatDuration(run.durationMs)} · ${run.scriptPath || '-'}`;
+    const text = log.text || (run.status === 'running' ? '运行中，等待订阅输出...' : '日志为空');
+    const changed = els.subscriptionLogViewer.textContent !== text;
+    if (changed) {
+      els.subscriptionLogViewer.textContent = text;
+      if (shouldAutoScroll || run.status === 'running') {
+        els.subscriptionLogViewer.scrollTop = els.subscriptionLogViewer.scrollHeight;
+      }
+    }
+    renderRunsIfVisible();
+    if (run.status !== 'running') {
+      await Promise.all([
+        refreshSubscriptions(),
+        refreshScripts(),
+        refreshQinglongOverview(),
+        refreshTasksAndRuns()
+      ]);
+      renderMetrics();
+      renderSubscriptions();
+      renderScripts();
+      renderRunsIfVisible();
+    }
+    return run;
+  } catch (error) {
+    if (!options.silent) toast(formatError(error), { tone: 'error', durationMs: 8000 });
+    return undefined;
+  }
+}
+
+function startSubscriptionLogRefresh(runId) {
+  stopSubscriptionLogRefresh();
+  subscriptionLogRefreshTimer = setInterval(async () => {
+    if (state.currentSubscriptionLogRunId !== runId || !els.subscriptionLogModal.open) {
+      stopSubscriptionLogRefresh();
+      return;
+    }
+    const run = await renderSubscriptionLog(runId, { silent: true });
+    if (!run || run.status !== 'running') {
+      stopSubscriptionLogRefresh();
+    }
+  }, 1000);
+}
+
+function stopSubscriptionLogRefresh() {
+  if (subscriptionLogRefreshTimer) {
+    clearInterval(subscriptionLogRefreshTimer);
+    subscriptionLogRefreshTimer = undefined;
+  }
+  if (!els.subscriptionLogModal?.open) {
+    state.currentSubscriptionLogRunId = '';
+    state.currentSubscriptionLogSubscriptionId = '';
+  }
+}
+
+async function copySubscriptionLog() {
+  await api.copyText(els.subscriptionLogViewer.textContent || '');
+  toast('订阅日志已复制到剪贴板');
+}
+
+async function openCurrentSubscriptionLogPage() {
+  const runId = state.currentSubscriptionLogRunId;
+  if (!runId) return;
+  els.subscriptionLogModal.close();
+  await refreshTasksAndRuns();
+  renderRuns();
+  await showPage('log');
+  await showRunLog(runId);
+}
+
+function isSubscriptionLogViewerNearBottom() {
+  if (!els.subscriptionLogViewer) return true;
+  return els.subscriptionLogViewer.scrollHeight - els.subscriptionLogViewer.scrollTop - els.subscriptionLogViewer.clientHeight < 60;
+}
+
+async function watchSubscriptionRun(runId, subscriptionId, fallbackName) {
+  let run;
+  try {
+    do {
+      await delay(1000);
+      run = await api.getRun(runId);
+      upsertRunRecord(run);
+      renderRunsIfVisible();
+      if (state.currentSubscriptionLogRunId === runId && els.subscriptionLogModal.open) {
+        await renderSubscriptionLog(runId, { silent: true });
+      }
+      if (state.currentRunId === runId) {
+        await renderRunLog(runId, { silent: true });
+      }
+    } while (run?.status === 'running');
+
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshScripts(),
+      refreshQinglongOverview(),
+      refreshTasksAndRuns()
+    ]);
+    renderMetrics();
+    renderSubscriptions();
+    renderScripts();
+    renderRunsIfVisible();
+
+    const subscription = state.subscriptions.find((item) => item.id === subscriptionId);
+    if (run?.status === 'success') {
+      const message = formatSubscriptionRunSuccess(subscription, fallbackName);
+      setSubscriptionRunStatus(message, 'success');
+      toast(message, { tone: 'success', durationMs: 7000 });
+      return;
+    }
+
+    const message = `订阅运行失败：${subscription?.lastError || run?.errorMessage || formatStatus(run?.status)}`;
+    setSubscriptionRunStatus(message, 'error');
+    toast(message, { tone: 'error', durationMs: 8000 });
+  } finally {
+    state.runningSubscriptionIds.delete(subscriptionId);
     renderSubscriptions();
   }
 }
@@ -1735,9 +2490,11 @@ function renderConfigs() {
       <small>${escapeHtml(formatBytes(item.size))} · ${escapeHtml(formatDateTime(item.updatedAt))}</small>
     </button>
   `).join('');
-  document.querySelectorAll('[data-config-name]').forEach((button) => {
-    button.addEventListener('click', () => loadConfig(button.dataset.configName));
-  });
+}
+
+function handleConfigListClick(event) {
+  const button = event.target.closest('[data-config-name]');
+  if (button) loadConfig(button.dataset.configName);
 }
 
 async function refreshConfigs() {
@@ -1801,39 +2558,44 @@ function renderScripts() {
   syncVisibleScriptDirectories(tree);
   els.scriptList.innerHTML = `<div class="script-tree">${renderScriptTreeChildren(tree, 0)}</div>`;
   els.selectAllScriptsInput.checked = allSelected;
-  document.querySelectorAll('[data-script-dir-toggle]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      event.stopPropagation();
-      toggleScriptDirectory(button.dataset.scriptDirToggle);
-    });
-  });
-  document.querySelectorAll('[data-script-dir-row]').forEach((row) => {
-    row.addEventListener('click', (event) => {
-      if (event.target.closest('input,button')) return;
-      toggleScriptDirectory(row.dataset.scriptDirRow);
-    });
-  });
-  document.querySelectorAll('[data-script-dir-check]').forEach((checkbox) => {
+  els.scriptList.querySelectorAll('[data-script-dir-check]').forEach((checkbox) => {
     checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
-    checkbox.addEventListener('click', (event) => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      toggleScriptDirectorySelection(checkbox.dataset.scriptDirCheck, checkbox.checked);
-      renderScripts();
-    });
   });
-  document.querySelectorAll('[data-script-path]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      if (event.target.closest('input')) return;
-      loadScript(button.dataset.scriptPath);
-    });
-  });
-  document.querySelectorAll('[data-script-check]').forEach((checkbox) => {
-    checkbox.addEventListener('click', (event) => event.stopPropagation());
-    checkbox.addEventListener('change', () => {
-      toggleSet(state.selectedScriptPaths, checkbox.dataset.scriptCheck, checkbox.checked);
-      renderScripts();
-    });
-  });
+}
+
+function handleScriptListClick(event) {
+  const toggle = event.target.closest('[data-script-dir-toggle]');
+  if (toggle) {
+    event.stopPropagation();
+    toggleScriptDirectory(toggle.dataset.scriptDirToggle);
+    return;
+  }
+
+  const dirRow = event.target.closest('[data-script-dir-row]');
+  if (dirRow && !event.target.closest('input,button')) {
+    toggleScriptDirectory(dirRow.dataset.scriptDirRow);
+    return;
+  }
+
+  const scriptRow = event.target.closest('[data-script-path]');
+  if (scriptRow && !event.target.closest('input')) {
+    loadScript(scriptRow.dataset.scriptPath);
+  }
+}
+
+function handleScriptListChange(event) {
+  const dirCheckbox = event.target.closest('[data-script-dir-check]');
+  if (dirCheckbox) {
+    toggleScriptDirectorySelection(dirCheckbox.dataset.scriptDirCheck, dirCheckbox.checked);
+    renderScripts();
+    return;
+  }
+
+  const scriptCheckbox = event.target.closest('[data-script-check]');
+  if (scriptCheckbox) {
+    toggleSet(state.selectedScriptPaths, scriptCheckbox.dataset.scriptCheck, scriptCheckbox.checked);
+    renderScripts();
+  }
 }
 
 function buildScriptTree(scripts) {
@@ -1876,11 +2638,11 @@ function renderScriptTreeChildren(node, depth) {
   ].join('');
 }
 
-function syncVisibleScriptDirectories(tree) {
+function syncVisibleScriptDirectories(tree, expandedDirs = state.expandedScriptDirs) {
   const dirs = collectScriptDirPaths(tree);
   const nextDirSet = new Set(['data/scripts', ...dirs]);
-  for (const dirPath of [...state.expandedScriptDirs]) {
-    if (!nextDirSet.has(dirPath)) state.expandedScriptDirs.delete(dirPath);
+  for (const dirPath of [...expandedDirs]) {
+    if (!nextDirSet.has(dirPath)) expandedDirs.delete(dirPath);
   }
 }
 
@@ -1951,6 +2713,16 @@ function collectScriptPaths(node) {
   ];
 }
 
+function findScriptTreeNode(node, dirPath) {
+  if (!node) return undefined;
+  if (node.path === dirPath) return node;
+  for (const child of node.dirs.values()) {
+    const match = findScriptTreeNode(child, dirPath);
+    if (match) return match;
+  }
+  return undefined;
+}
+
 function toggleScriptDirectory(dirPath) {
   if (state.expandedScriptDirs.has(dirPath)) state.expandedScriptDirs.delete(dirPath);
   else state.expandedScriptDirs.add(dirPath);
@@ -1966,14 +2738,14 @@ function toggleScriptDirectorySelection(dirPath, checked) {
   }
 }
 
-function expandScriptParents(scriptPath) {
+function expandScriptParents(scriptPath, expandedDirs = state.expandedScriptDirs) {
   const normalized = String(scriptPath || '').replaceAll('\\', '/');
   if (!normalized.startsWith('data/scripts/')) return;
   const parts = normalized.split('/').slice(0, -1);
   let current = '';
   for (const part of parts) {
     current = current ? `${current}/${part}` : part;
-    if (current.startsWith('data/scripts')) state.expandedScriptDirs.add(current);
+    if (current.startsWith('data/scripts')) expandedDirs.add(current);
   }
 }
 
@@ -2208,9 +2980,6 @@ function renderDependencies() {
         </tbody>
       </table>
     `;
-    document.querySelectorAll('[data-remove-dependency]').forEach((button) => {
-      button.addEventListener('click', () => removeDependency(button.dataset.removeDependency));
-    });
   }
 
   els.dependencyHistory.innerHTML = state.dependencyHistory.length
@@ -2221,6 +2990,11 @@ function renderDependencies() {
       </div>
     `).join('')
     : '<div class="empty">暂无依赖操作记录</div>';
+}
+
+function handleDependencyTableClick(event) {
+  const button = event.target.closest('[data-remove-dependency]');
+  if (button) removeDependency(button.dataset.removeDependency);
 }
 
 async function installDependency() {
@@ -2295,7 +3069,15 @@ function renderRuns() {
       `).join('')}
     </div>
   `;
-  document.querySelectorAll('[data-run-id]').forEach((button) => button.addEventListener('click', () => showRunLog(button.dataset.runId)));
+}
+
+function renderRunsIfVisible() {
+  if (state.activePage === 'log') renderRuns();
+}
+
+function handleRunListClick(event) {
+  const button = event.target.closest('[data-run-id]');
+  if (button) showRunLog(button.dataset.runId);
 }
 
 async function refreshRuns() {
@@ -2335,9 +3117,17 @@ async function renderRunLog(runId, options = {}) {
     }
     renderRuns();
     if (run.status !== 'running') {
-      await refreshTasksAndRuns();
+      const refreshes = [refreshTasksAndRuns()];
+      if (run.trigger === 'subscription') {
+        refreshes.push(refreshSubscriptions(), refreshScripts(), refreshQinglongOverview());
+      }
+      await Promise.all(refreshes);
       renderMetrics();
       renderTasks();
+      if (run.trigger === 'subscription') {
+        renderSubscriptions();
+        renderScripts();
+      }
       renderRuns();
     }
     return run;
@@ -2590,8 +3380,9 @@ function upsertRunRecord(run) {
 function groupRunsByScript(runs) {
   const sorted = [...runs].toSorted((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
   const groups = new Map();
+  const tasksById = new Map(state.tasks.map((task) => [task.id, task]));
   for (const run of sorted) {
-    const task = state.tasks.find((item) => item.id === run.taskId);
+    const task = tasksById.get(run.taskId);
     const display = getRunDisplayInfo(run, task);
     const key = display.key;
     if (!groups.has(key)) {
@@ -2609,6 +3400,14 @@ function groupRunsByScript(runs) {
 }
 
 function getRunDisplayInfo(run, task) {
+  if (run.trigger === 'subscription') {
+    return {
+      key: run.taskId || run.scriptPath || run.id,
+      title: run.name || '订阅运行',
+      subtitle: run.scriptPath || `运行 ID: ${run.id}`
+    };
+  }
+
   const scriptPath = task?.scriptPath || run.scriptPath || '';
   const name = task?.name || run.name || scriptPath.split('/').pop() || run.id;
   return {
@@ -2693,55 +3492,6 @@ function upsertSubscription(subscription) {
   renderSubscriptions();
 }
 
-function openSubscriptionLogModal(subscription, text, metaText = '') {
-  if (!els.subscriptionLogModal) return;
-  const name = subscription?.name || (subscription?.id ? getSubscriptionName(subscription.id) : '') || '订阅';
-  els.subscriptionLogTitle.textContent = `订阅拉取日志 - ${name}`;
-  els.subscriptionLogMeta.textContent = metaText || '订阅拉取日志';
-  setSubscriptionLogContent(text || getSubscriptionLogText(subscription) || '暂无日志');
-  if (!els.subscriptionLogModal.open) {
-    els.subscriptionLogModal.showModal();
-  }
-}
-
-function setSubscriptionLogContent(text) {
-  if (!els.subscriptionLogViewer) return;
-  els.subscriptionLogViewer.textContent = String(text || '暂无日志');
-  requestAnimationFrame(() => {
-    els.subscriptionLogViewer.scrollTop = els.subscriptionLogViewer.scrollHeight;
-  });
-}
-
-function appendSubscriptionLog(text) {
-  const current = els.subscriptionLogViewer?.textContent || '';
-  setSubscriptionLogContent(`${current}${current.endsWith('\n') ? '' : '\n'}${text}`);
-}
-
-function getSubscriptionLogText(subscription) {
-  return subscription?.lastLog || subscription?.lastResult || '暂无日志';
-}
-
-function formatSubscriptionLogSection(subscription, fallbackName) {
-  const name = subscription?.name || fallbackName || '订阅';
-  const status = subscription?.lastPulledAt ? `时间：${formatDateTime(subscription.lastPulledAt)}` : '时间：-';
-  const result = subscription?.lastResult ? `结果：${subscription.lastResult}` : '结果：-';
-  return `===== ${name} =====\n${status}\n${result}\n\n${getSubscriptionLogText(subscription)}`;
-}
-
-async function copySubscriptionLog() {
-  const text = els.subscriptionLogViewer?.textContent || '';
-  if (!text.trim()) {
-    toast('暂无日志可复制', { tone: 'info' });
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('日志已复制', { tone: 'success' });
-  } catch {
-    toast('复制日志失败', { tone: 'error' });
-  }
-}
-
 function getSubscriptionName(id) {
   const subscription = state.subscriptions.find((item) => item.id === id);
   return subscription?.name || id || '未命名订阅';
@@ -2759,6 +3509,10 @@ function setSubscriptionRunStatus(message, tone = 'info') {
   els.subscriptionRunStatus.textContent = message;
   els.subscriptionRunStatus.dataset.tone = tone;
   els.subscriptionRunStatus.hidden = false;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function keepExistingSelection(selection, ids) {
@@ -2829,7 +3583,8 @@ function formatTrigger(trigger) {
   const map = {
     manual: '手动',
     api: '接口',
-    schedule: '定时'
+    schedule: '定时',
+    subscription: '订阅'
   };
   return map[trigger] || trigger || '-';
 }

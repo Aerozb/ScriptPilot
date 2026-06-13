@@ -316,7 +316,10 @@ async function routeQinglongRequest(coreApp, request, url) {
 
   const subscriptionRunMatch = pathname.match(/^\/subscriptions\/([^/]+)\/run$/);
   if (request.method === 'POST' && subscriptionRunMatch) {
-    return handled(await service.runSubscription(decodeURIComponent(subscriptionRunMatch[1])));
+    return handled(await service.runSubscription(decodeURIComponent(subscriptionRunMatch[1]), {
+      background: ['1', 'true'].includes(String(url.searchParams.get('background') || '').toLowerCase()),
+      waitForCompletion: String(url.searchParams.get('waitForCompletion') || '').toLowerCase() === 'false' ? false : undefined
+    }));
   }
 
   if (request.method === 'GET' && pathname === '/dependencies') {

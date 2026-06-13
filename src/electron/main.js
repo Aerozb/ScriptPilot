@@ -23,6 +23,7 @@ import { AppError, toAppError } from '../main/shared/errors/app-error.js';
 import { assertInsidePath, resolvePortablePath } from '../main/bootstrap/portable-paths.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const appIconPath = path.join(__dirname, '..', '..', 'build', 'icon.ico');
 let coreApp;
 let mainWindow;
 let apiServer;
@@ -50,6 +51,7 @@ async function createMainWindow(options = {}) {
     minHeight: 680,
     show: options.show !== false,
     title: 'ScriptPilot',
+    icon: appIconPath,
     backgroundColor: '#e8edf4',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -171,7 +173,7 @@ function registerIpc() {
   ipcMain.handle('ql:subscription:list', async () => safeInvoke(() => coreApp.services.qinglongService.listSubscriptions()));
   ipcMain.handle('ql:subscription:save', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.saveSubscription(input)));
   ipcMain.handle('ql:subscription:delete', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.deleteSubscriptions(input?.ids || [])));
-  ipcMain.handle('ql:subscription:run', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.runSubscription(input?.id)));
+  ipcMain.handle('ql:subscription:run', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.runSubscription(input?.id, input || {})));
   ipcMain.handle('ql:dependency:list', async () => safeInvoke(() => coreApp.services.qinglongService.listDependencies()));
   ipcMain.handle('ql:dependency:install', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.installDependency(input?.name)));
   ipcMain.handle('ql:dependency:remove', async (_event, input) => safeInvoke(() => coreApp.services.qinglongService.removeDependency(input?.name)));
@@ -237,7 +239,14 @@ const shouldRunSmokeDemo =
 if (shouldRunSmokeDemo) {
   app.whenReady().then(() => runSmokeDemoAndExit(portableRoot));
 } else {
-  const gotLock = app.requestSingleInstanceLock();
+  const shouldBypassSingleInstanceLock =
+    app.commandLine.hasSwitch('acceptance-test') ||
+    app.commandLine.hasSwitch('ui-flow-test') ||
+    app.commandLine.hasSwitch('ui-smoke') ||
+    process.argv.includes('--acceptance-test') ||
+    process.argv.includes('--ui-flow-test') ||
+    process.argv.includes('--ui-smoke');
+  const gotLock = shouldBypassSingleInstanceLock || app.requestSingleInstanceLock();
   if (!gotLock) {
     app.quit();
   } else {
@@ -247,7 +256,9 @@ if (shouldRunSmokeDemo) {
 
   app.whenReady().then(async () => {
     coreApp = await createApp({ portableRoot });
-    apiServer = startApiServer(coreApp);
+    apiServer = startApiServer(coreApp, {
+      port: readApiPort()
+    });
     coreApp.scheduler.start();
     coreApp.services.logCleanupService.start();
     registerIpc();
@@ -262,6 +273,11 @@ if (shouldRunSmokeDemo) {
       }
     });
   }
+}
+
+function readApiPort() {
+  const value = Number(process.env.SCRIPTPILOT_API_PORT);
+  return Number.isInteger(value) && value > 0 && value <= 65535 ? value : 18760;
 }
 
 async function runSmokeDemoAndExit(portableRoot) {

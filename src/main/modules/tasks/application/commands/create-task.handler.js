@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { commandOk } from '../../../../shared/application/command-result.js';
 import { assertValidCronExpression } from '../../../scheduler/infrastructure/cron-expression.js';
-import { resolvePortablePath, toPortablePath } from '../../../../bootstrap/portable-paths.js';
+import { assertInsidePath, resolvePortablePath, toPortablePath } from '../../../../bootstrap/portable-paths.js';
 import { Task } from '../../domain/task.aggregate.js';
 
 export class CreateTaskHandler {
@@ -29,8 +29,10 @@ export class CreateTaskHandler {
   }
 
   async writeTaskScript(input) {
-    const fileName = `${Date.now()}-${sanitizeFileName(input.name || 'task')}.js`;
-    const scriptPath = path.join(this.paths.scriptsRoot, 'tasks', fileName);
+    const scriptPath = input.scriptPath
+      ? resolvePortablePath(this.paths, input.scriptPath, { label: '脚本保存路径' })
+      : path.join(this.paths.scriptsRoot, 'tasks', `${Date.now()}-${sanitizeFileName(input.name || 'task')}.js`);
+    assertInsidePath(this.paths.scriptsRoot, scriptPath, '脚本保存路径');
     await mkdir(path.dirname(scriptPath), { recursive: true });
     await writeFile(scriptPath, input.scriptContent, 'utf8');
     return toPortablePath(this.paths, scriptPath);

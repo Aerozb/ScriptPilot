@@ -52,7 +52,7 @@ contextBridge.exposeInMainWorld('scriptPilot', {
   listSubscriptions: () => invoke('ql:subscription:list'),
   saveSubscription: (input) => invoke('ql:subscription:save', input),
   deleteSubscriptions: (ids) => invoke('ql:subscription:delete', { ids }),
-  runSubscription: (id) => invoke('ql:subscription:run', { id }),
+  runSubscription: (id, options = {}) => invoke('ql:subscription:run', { id, ...options }),
   listDependencies: () => invoke('ql:dependency:list'),
   installDependency: (name) => invoke('ql:dependency:install', { name }),
   removeDependency: (name) => invoke('ql:dependency:remove', { name })

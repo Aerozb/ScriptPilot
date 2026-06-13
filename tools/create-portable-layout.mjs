@@ -9,28 +9,39 @@ const execFileAsync = promisify(execFile);
 const releaseRoot = path.resolve('release/win-unpacked');
 const internalDirName = 'app';
 const internalDir = path.join(releaseRoot, internalDirName);
+const rootLauncher = path.join(releaseRoot, 'ScriptPilot.exe');
+const internalAppExe = path.join(internalDir, 'ScriptPilot.exe');
 const launcherSource = path.resolve('tools/launcher/ScriptPilotLauncher.cs');
 const launcherManifest = path.resolve('tools/launcher/ScriptPilotLauncher.manifest');
+const launcherIcon = path.resolve('build/icon.ico');
 const launcherOutput = path.join(os.tmpdir(), `ScriptPilotLauncher-${Date.now()}.exe`);
 
-await fs.access(path.join(releaseRoot, 'ScriptPilot.exe'));
+const alreadyPortable = await pathExists(internalAppExe);
+if (!alreadyPortable) {
+  await fs.access(rootLauncher);
+}
+await fs.access(launcherIcon);
 await compileLauncher(launcherOutput);
 
-await fs.rm(internalDir, { recursive: true, force: true });
-await fs.mkdir(internalDir, { recursive: true });
+if (alreadyPortable) {
+  await fs.copyFile(launcherOutput, rootLauncher);
+} else {
+  await fs.rm(internalDir, { recursive: true, force: true });
+  await fs.mkdir(internalDir, { recursive: true });
 
-const entries = await fs.readdir(releaseRoot, { withFileTypes: true });
-for (const entry of entries) {
-  if (entry.name === internalDirName) continue;
-  const source = path.join(releaseRoot, entry.name);
-  const target = path.join(internalDir, entry.name);
-  await fs.rename(source, target);
+  const entries = await fs.readdir(releaseRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === internalDirName) continue;
+    const source = path.join(releaseRoot, entry.name);
+    const target = path.join(internalDir, entry.name);
+    await fs.rename(source, target);
+  }
+
+  await fs.copyFile(launcherOutput, rootLauncher);
 }
-
-await fs.copyFile(launcherOutput, path.join(releaseRoot, 'ScriptPilot.exe'));
 await fs.rm(launcherOutput, { force: true });
 
-await fs.access(path.join(internalDir, 'ScriptPilot.exe'));
+await fs.access(internalAppExe);
 await fs.access(path.join(internalDir, 'runtime', 'node', 'active', 'node.exe'));
 
 const rootEntries = (await fs.readdir(releaseRoot)).sort();
@@ -49,6 +60,7 @@ async function compileLauncher(outputPath) {
     '/optimize+',
     `/out:${outputPath}`,
     `/win32manifest:${launcherManifest}`,
+    `/win32icon:${launcherIcon}`,
     '/reference:System.Windows.Forms.dll',
     launcherSource
   ], {
@@ -72,4 +84,13 @@ async function findCsc() {
   }
 
   throw new Error('csc.exe not found. Windows .NET Framework compiler is required to build the launcher.');
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }

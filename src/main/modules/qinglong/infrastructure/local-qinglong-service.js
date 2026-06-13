@@ -1,14 +1,17 @@
-import { spawn } from 'node:child_process';
+﻿import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, readFile, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { URL } from 'node:url';
 import { JsonStore } from '../../../shared/infrastructure/filesystem/json-store.js';
 import { AppError } from '../../../shared/errors/app-error.js';
-import { createPortableProcessEnv } from '../../../bootstrap/portable-paths.js';
+import { createPortableProcessEnv, resolvePortablePath, toPortablePath } from '../../../bootstrap/portable-paths.js';
 import { resolveNodeRuntime } from '../../runtime/infrastructure/node-runtime-resolver.js';
 import { resolveGitRuntime } from '../../runtime/infrastructure/git-runtime-resolver.js';
+import { Run } from '../../runs/domain/run.aggregate.js';
+import { Task } from '../../tasks/domain/task.aggregate.js';
+import { assertValidCronExpression } from '../../scheduler/infrastructure/cron-expression.js';
 
 const DEFAULT_CONFIGS = {
   'config.sh': '# ScriptPilot 本地青龙版配置\nexport QL_DIR=\"$PWD\"\n',
@@ -23,12 +26,13 @@ const SCRIPT_SUBSCRIPTION_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const SUBSCRIPTION_SUPPORT_FILES = new Set(['package.json']);
 const MAX_REPOSITORY_FILES = 5000;
 const MAX_SUBSCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_SUBSCRIPTION_LOG_CHARS = 120000;
 const GITHUB_ACCELERATOR_BASE_URL = 'https://ghfast.top/';
 
 export class LocalQinglongService {
-  constructor(paths) {
+  constructor(paths, deps = {}) {
     this.paths = paths;
+    this.runRepository = deps.runRepository;
+    this.taskRepository = deps.taskRepository;
     this.envStore = new JsonStore(path.join(paths.appStateRoot, 'envs.json'), []);
     this.subscriptionStore = new JsonStore(path.join(paths.appStateRoot, 'subscriptions.json'), []);
     this.dependencyHistoryStore = new JsonStore(path.join(paths.appStateRoot, 'dependency-history.json'), []);
@@ -201,6 +205,7 @@ export class LocalQinglongService {
       branch: String(input.branch ?? ''),
       schedule: String(input.schedule ?? ''),
       status: input.status === 'disabled' ? 'disabled' : 'enabled',
+      autoCreateTasks: input.autoCreateTasks === undefined ? Boolean(existing.autoCreateTasks) : Boolean(input.autoCreateTasks),
       subscriptionFolder,
       lastPulledAt: input.lastPulledAt || existing.lastPulledAt,
       lastResult: existing.lastResult,
@@ -237,32 +242,75 @@ export class LocalQinglongService {
     return { deleted: ids.length };
   }
 
-  async runSubscription(id) {
+  async runSubscription(id, options = {}) {
     const rows = await this.subscriptionStore.read();
     const index = rows.findIndex((item) => item.id === id);
     if (index < 0) throw new AppError('SUBSCRIPTION_NOT_FOUND', `订阅不存在: ${id}`);
-    const logger = createSubscriptionLogger(rows[index]);
+
+    if (!this.runRepository) {
+      return this.pullAndSaveSubscription(rows, index);
+    }
+
+    const { run } = createSubscriptionRun(this.paths, rows[index]);
+    const now = new Date().toISOString();
+    rows[index] = {
+      ...rows[index],
+      lastPulledAt: now,
+      lastResult: '运行中，日志正在生成',
+      lastError: undefined,
+      lastRunId: run.id,
+      updatedAt: now
+    };
+    await this.runRepository.save(run);
+    await this.subscriptionStore.write(rows);
+
+    const executeRun = () => this.executeSubscriptionRun(rows[index].id, run.id);
+    const shouldRunInBackground = options.background === true || options.waitForCompletion === false;
+    if (shouldRunInBackground) {
+      executeRun().catch((error) => {
+        console.error(`订阅后台运行失败: ${rows[index].name}`, error);
+      });
+      return { ...rows[index], runId: run.id, started: true };
+    }
+
+    const result = await executeRun();
+    return { ...result, runId: run.id, started: false };
+  }
+
+  async pullAndSaveSubscription(rows, index, context = {}) {
+    const logRows = [];
+    const baseLog = typeof context.log === 'function' ? context.log : async () => {};
+    const log = async (message) => {
+      const text = String(message ?? '');
+      logRows.push(`[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${text}`);
+      await baseLog(text);
+    };
+
     try {
-      logger.info(`开始拉取订阅：${rows[index].name}`);
       const result = await pullSubscriptionFiles({
         subscription: rows[index],
         paths: this.paths,
         scriptRoot: this.scriptRoot,
         repoRoot: this.repoRoot,
         rawRoot: this.rawRoot,
-        logger
+        log
       });
-      logger.info(`拉取完成：${result.files.length} 个文件 -> ${result.localPath}`);
+      const autoCreateTasks = rows[index].autoCreateTasks
+        ? await this.createTasksFromSubscription(rows[index], result, log)
+        : undefined;
+      const autoCreateSummary = formatAutoCreateTaskSummary(autoCreateTasks);
       rows[index] = {
         ...rows[index],
         subscriptionFolder: result.subscriptionFolder,
         localPath: result.localPath,
         repoPath: result.repoPath,
         lastPulledAt: new Date().toISOString(),
-        lastResult: `已拉取 ${result.files.length} 个文件到 ${result.localPath}`,
-        lastLog: logger.toText(),
+        lastResult: `已拉取 ${result.files.length} 个文件到 ${result.localPath}${autoCreateSummary ? `，${autoCreateSummary}` : ''}`,
+        lastLog: logRows.join('\n'),
         lastFiles: result.files,
         lastError: undefined,
+        lastRunId: context.runId || rows[index].lastRunId,
+        lastAutoCreateTasks: autoCreateTasks,
         sourceType: result.sourceType,
         updatedAt: new Date().toISOString()
       };
@@ -270,16 +318,119 @@ export class LocalQinglongService {
       return rows[index];
     } catch (error) {
       const message = error instanceof AppError ? error.message : String(error?.message || error);
-      logger.error(`拉取失败：${message}`);
       rows[index] = {
         ...rows[index],
         lastPulledAt: new Date().toISOString(),
         lastResult: `拉取失败: ${message}`,
-        lastLog: logger.toText(),
+        lastLog: logRows.join('\n'),
         lastError: message,
+        lastRunId: context.runId || rows[index].lastRunId,
         updatedAt: new Date().toISOString()
       };
       await this.subscriptionStore.write(rows);
+      throw error;
+    }
+  }
+
+  async createTasksFromSubscription(subscription, pullResult, log = async () => {}) {
+    const summary = {
+      enabled: true,
+      created: 0,
+      skippedExisting: 0,
+      skippedNoCron: 0,
+      skippedInvalidCron: 0,
+      items: []
+    };
+    if (!this.taskRepository) {
+      await log('自动创建任务：任务仓库未初始化，已跳过');
+      return { ...summary, skippedReason: '任务仓库未初始化' };
+    }
+
+    const existingTasks = await this.taskRepository.list();
+    const existingScriptPaths = new Set(existingTasks.map((task) => task.scriptPath));
+    for (const scriptPath of pullResult.files || []) {
+      if (existingScriptPaths.has(scriptPath)) {
+        summary.skippedExisting += 1;
+        summary.items.push({ scriptPath, status: 'skipped-existing' });
+        continue;
+      }
+
+      let content = '';
+      try {
+        content = await readFile(resolvePortablePath(this.paths, scriptPath, { label: '订阅脚本路径' }), 'utf8');
+      } catch (error) {
+        summary.skippedInvalidCron += 1;
+        summary.items.push({ scriptPath, status: 'read-failed', message: error.message });
+        continue;
+      }
+
+      const cronInfo = extractScriptCron(content);
+      if (!cronInfo) {
+        summary.skippedNoCron += 1;
+        summary.items.push({ scriptPath, status: 'skipped-no-cron' });
+        continue;
+      }
+
+      try {
+        assertValidCronExpression(cronInfo.cron);
+      } catch (error) {
+        summary.skippedInvalidCron += 1;
+        summary.items.push({ scriptPath, status: 'skipped-invalid-cron', cron: cronInfo.rawCron || cronInfo.cron, message: error.message });
+        continue;
+      }
+
+      const task = Task.create({
+        name: cronInfo.name || createTaskNameFromScriptPath(scriptPath),
+        scriptPath,
+        cwd: pullResult.localPath,
+        cronExpression: cronInfo.cron,
+        labels: ['订阅', subscription.name].filter(Boolean),
+        remark: `订阅「${subscription.name}」自动创建`,
+        enabled: true,
+        timeoutMs: 30000
+      });
+      await this.taskRepository.save(task);
+      existingScriptPaths.add(scriptPath);
+      summary.created += 1;
+      summary.items.push({ scriptPath, status: 'created', taskId: task.id, cron: cronInfo.cron });
+      await log(`自动创建任务：${task.name}，cron=${cronInfo.cron}`);
+    }
+
+    await log(`自动创建任务完成：新建 ${summary.created}，已存在 ${summary.skippedExisting}，无 cron ${summary.skippedNoCron}，无效 ${summary.skippedInvalidCron}`);
+    return summary;
+  }
+
+  async executeSubscriptionRun(subscriptionId, runId) {
+    const run = await this.runRepository.findById(runId);
+    if (!run) throw new AppError('RUN_NOT_FOUND', `运行记录不存在: ${runId}`);
+
+    const stdoutPath = resolvePortablePath(this.paths, run.stdoutPath, { label: '标准输出日志路径' });
+    const stderrPath = resolvePortablePath(this.paths, run.stderrPath, { label: '错误日志路径' });
+    const log = (message) => appendSubscriptionLog(stdoutPath, message);
+
+    const rows = await this.subscriptionStore.read();
+    const index = rows.findIndex((item) => item.id === subscriptionId);
+    if (index < 0) {
+      const error = new AppError('SUBSCRIPTION_NOT_FOUND', `订阅不存在: ${subscriptionId}`);
+      await appendSubscriptionLog(stderrPath, error.message);
+      markRunFailed(run, error);
+      await this.runRepository.save(run);
+      throw error;
+    }
+
+    try {
+      await log(`开始运行订阅：${rows[index].name}`);
+      await log(`订阅地址：${rows[index].url || '-'}`);
+      const result = await this.pullAndSaveSubscription(rows, index, { runId, log });
+      await log(`订阅运行成功：已拉取 ${result.lastFiles?.length || 0} 个文件到 ${result.localPath}`);
+      markRunSucceeded(run);
+      await this.runRepository.save(run);
+      return result;
+    } catch (error) {
+      const message = error instanceof AppError ? error.message : String(error?.message || error);
+      await appendSubscriptionLog(stderrPath, error.stack || message);
+      markRunFailed(run, error);
+      await this.runRepository.save(run);
       throw error;
     }
   }
@@ -343,21 +494,23 @@ export class LocalQinglongService {
 
 async function listFilesRecursive(root, current) {
   const entries = await readdir(current, { withFileTypes: true });
-  const items = [];
-  for (const entry of entries) {
+  const groups = await Promise.all(entries.map(async (entry) => {
     const fullPath = path.join(current, entry.name);
     if (entry.isDirectory()) {
-      items.push(...await listFilesRecursive(root, fullPath));
-    } else if (entry.isFile()) {
+      return listFilesRecursive(root, fullPath);
+    }
+    if (entry.isFile()) {
       const fileStat = await stat(fullPath);
-      items.push({
+      return [{
         name: entry.name,
         path: toDataScriptPath(root, fullPath),
         size: fileStat.size,
         updatedAt: fileStat.mtime.toISOString()
-      });
+      }];
     }
-  }
+    return [];
+  }));
+  const items = groups.flat();
   return items.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
@@ -366,9 +519,8 @@ async function pullSubscriptionFiles(input) {
     throw new AppError('INVALID_SUBSCRIPTION_URL', '订阅地址不能为空');
   }
 
-  const logger = input.logger;
+  const log = createSubscriptionLogger(input.log);
   const source = parseSubscriptionSource(input.subscription);
-  logger?.info(`解析订阅源：${describeSubscriptionSource(source)}`);
   const subscriptionFolder = createSubscriptionFolder(input.subscription.name, input.subscription.id, source);
   const previousFolder = input.subscription.subscriptionFolder ? sanitizePathPart(input.subscription.subscriptionFolder) : '';
   const repoRoot = input.repoRoot || path.join(path.dirname(input.scriptRoot), 'repo');
@@ -379,33 +531,21 @@ async function pullSubscriptionFiles(input) {
   await mkdir(repoRoot, { recursive: true });
   await mkdir(rawRoot, { recursive: true });
   await mkdir(input.scriptRoot, { recursive: true });
-  logger?.info(`脚本目录：data/scripts/${subscriptionFolder}`);
-  logger?.info(`仓库缓存：data/repo/${subscriptionFolder}`);
-
-  const currentFolder = sanitizePathPart(subscriptionFolder);
-  if (previousFolder && previousFolder !== currentFolder) {
-    logger?.info(`订阅目录名已变化，清理旧目录：${previousFolder}`);
-    const oldScriptFolderPath = path.join(input.scriptRoot, previousFolder);
-    const oldRepoFolderPath = path.join(repoRoot, previousFolder);
-    const oldRawFilePath = path.join(rawRoot, `${previousFolder}.js`);
-    await assertInside(input.scriptRoot, oldScriptFolderPath);
-    await assertInside(repoRoot, oldRepoFolderPath);
-    await assertInside(rawRoot, oldRawFilePath);
-    await rm(oldScriptFolderPath, { recursive: true, force: true });
-    await rm(oldRepoFolderPath, { recursive: true, force: true });
-    await rm(oldRawFilePath, { force: true });
-  }
-
-  for (const folder of new Set([currentFolder].filter(Boolean))) {
+  await log(`解析订阅源：${describeSubscriptionSource(source)}`);
+  await log(`目标脚本目录：data/scripts/${subscriptionFolder}`);
+  for (const folder of new Set([previousFolder, sanitizePathPart(subscriptionFolder)].filter(Boolean))) {
     const scriptFolderPath = path.join(input.scriptRoot, folder);
+    const repoFolderPath = path.join(repoRoot, folder);
     const rawFilePath = path.join(rawRoot, `${folder}.js`);
     await assertInside(input.scriptRoot, scriptFolderPath);
+    await assertInside(repoRoot, repoFolderPath);
     await assertInside(rawRoot, rawFilePath);
+    await log(`清理本地缓存和脚本目录：${folder}`);
     await rm(scriptFolderPath, { recursive: true, force: true });
+    await rm(repoFolderPath, { recursive: true, force: true });
     await rm(rawFilePath, { force: true });
   }
   await mkdir(scriptTargetRoot, { recursive: true });
-  logger?.info('已清理本次导入目录，准备重新导入脚本');
 
   const result = await downloadSubscriptionSource(source, {
     paths: input.paths,
@@ -413,17 +553,16 @@ async function pullSubscriptionFiles(input) {
     rawRoot,
     rawFilePath: rawTargetPath,
     scriptRoot: scriptTargetRoot,
-    subscriptionFolder,
-    logger
-  });
+    subscriptionFolder
+  }, log);
   const files = result.files;
   if (!files.length) {
     throw new AppError('SUBSCRIPTION_EMPTY', '订阅源没有找到可导入的 NodeJS 脚本文件');
   }
 
   await ensureSubscriptionSupportFiles(scriptTargetRoot);
-  logger?.success(`导入完成：${files.length} 个文件`);
-  logFileList(logger, '导入清单', files);
+  await log(`写入青龙兼容支持文件：sendNotify.js`);
+  await log(`导入完成：${files.length} 个脚本文件`);
 
   return {
     subscriptionFolder,
@@ -432,6 +571,10 @@ async function pullSubscriptionFiles(input) {
     repoPath: result.repoPath,
     files: files.map((file) => `data/scripts/${subscriptionFolder}/${file}`.replaceAll('\\', '/'))
   };
+}
+
+function createSubscriptionLogger(log) {
+  return typeof log === 'function' ? log : async () => {};
 }
 
 function parseSubscriptionInput(subscription) {
@@ -629,45 +772,45 @@ function parseSubscriptionSource(subscription) {
   };
 }
 
-async function downloadSubscriptionSource(source, targets) {
-  if (source.type === 'github-repo') return downloadGitHubRepository(source, targets);
-  if (source.type === 'github-file' || source.type === 'github-raw-file') return downloadGitHubFile(source, targets);
-  if (source.type === 'http-file') return downloadHttpFile(source, targets);
+async function downloadSubscriptionSource(source, targets, log = async () => {}) {
+  if (source.type === 'github-repo') return downloadGitHubRepository(source, targets, log);
+  if (source.type === 'github-file' || source.type === 'github-raw-file') return downloadGitHubFile(source, targets, log);
+  if (source.type === 'http-file') return downloadHttpFile(source, targets, log);
   throw new AppError('UNSUPPORTED_SUBSCRIPTION_SOURCE', '不支持的订阅源类型');
 }
 
-async function downloadGitHubRepository(source, targets) {
+async function downloadGitHubRepository(source, targets, log = async () => {}) {
   if (!targets.paths) {
     throw new AppError('PORTABLE_PATHS_REQUIRED', '仓库订阅缺少绿色目录上下文');
   }
 
-  const logger = targets.logger;
   const prefix = normalizeRepoPath(source.subPath);
   const gitRuntime = await resolveGitRuntime(targets.paths);
   const cloneUrl = createGitHubCloneUrl(source);
-  logger?.info(`Git 运行时：${gitRuntime.version || 'unknown'}（${gitRuntime.source || 'unknown'}）`);
-  logger?.info(`仓库地址：${cloneUrl}`);
-  if (source.branch) logger?.info(`指定分支：${source.branch}`);
-  if (prefix) logger?.info(`仓库子目录：${prefix}`);
+  await log(`Git 运行时：${gitRuntime.version || 'unknown'}，${gitRuntime.source || 'unknown'}`);
+  await log(`仓库地址：${cloneUrl}`);
+  if (source.branch) await log(`指定分支：${source.branch}`);
+  if (prefix) await log(`仓库子目录：${prefix}`);
+
   await syncGitRepositoryWithFallback({
     gitRuntime,
     paths: targets.paths,
     cloneUrl,
     branch: source.branch,
     targetRoot: targets.repoRoot,
-    logger
+    log
   });
 
   const sourceRoot = prefix ? path.join(targets.repoRoot, prefix) : targets.repoRoot;
   await assertInside(targets.repoRoot, sourceRoot);
   await assertDirectoryExists(sourceRoot, 'SUBSCRIPTION_SUBPATH_NOT_FOUND', `订阅仓库目录不存在: ${prefix || '/'}`);
-  logger?.info(`扫描仓库文件：${prefix || '/'}`);
+  await log(`扫描仓库文件：${prefix || '/'}`);
 
   const repoEntries = await listPullableRepositoryFiles({
     sourceRoot,
     filters: source.filters
   });
-  logger?.info(`筛选到可导入文件：${repoEntries.length} 个`);
+  await log(`筛选到可导入文件：${repoEntries.length} 个`);
 
   const written = [];
   for (const entry of repoEntries) {
@@ -677,6 +820,7 @@ async function downloadGitHubRepository(source, targets) {
       relativePath: entry.path
     });
     written.push(normalizeRelativePath(entry.path));
+    await log(`导入脚本：${normalizeRelativePath(entry.path)}`);
   }
 
   return {
@@ -685,8 +829,7 @@ async function downloadGitHubRepository(source, targets) {
   };
 }
 
-async function downloadGitHubFile(source, targets) {
-  const logger = targets.logger;
+async function downloadGitHubFile(source, targets, log = async () => {}) {
   const repoPath = normalizeRepoPath(source.repoPath);
   if (!pathShouldBePulled(repoPath, source.filters)) {
     throw new AppError('UNSUPPORTED_SCRIPT_FILE', '订阅文件只支持 .js、.mjs、.cjs 或 package.json');
@@ -694,14 +837,13 @@ async function downloadGitHubFile(source, targets) {
   const branch = source.branch || await resolveGitHubBranch(source);
   const rawUrl = source.rawUrl || createGitHubRawUrl(source.owner, source.repo, branch, repoPath);
   const relativePath = path.posix.basename(repoPath);
-  logger?.info(`下载 GitHub 文件：${source.owner}/${source.repo}/${repoPath}`);
-  logger?.info(`文件分支：${branch}`);
+  await log(`下载 GitHub 文件：${source.owner}/${source.repo}/${repoPath}#${branch}`);
   await writeRemoteFile({
     url: rawUrl,
     fallbackUrl: createGitHubAcceleratedUrl(rawUrl),
     targetRoot: targets.repoRoot,
     relativePath,
-    logger
+    log
   });
   await copySubscriptionScript({
     sourceRoot: targets.repoRoot,
@@ -714,20 +856,20 @@ async function downloadGitHubFile(source, targets) {
   };
 }
 
-async function downloadHttpFile(source, targets) {
-  const logger = targets.logger;
+async function downloadHttpFile(source, targets, log = async () => {}) {
   const relativePath = sanitizePathPart(source.fileName);
   if (!pathShouldBePulled(relativePath)) {
-    throw new AppError('UNSUPPORTED_SCRIPT_FILE', '普通 HTTP 订阅只支持 .js、.mjs、.cjs 或 package.json');
+    throw new AppError('UNSUPPORTED_SCRIPT_FILE', 'HTTP 订阅只支持 .js、.mjs、.cjs 或 package.json');
   }
-  logger?.info(`下载 HTTP 文件：${source.fileName}`);
+  await log(`下载 HTTP 文件：${source.url}`);
   await writeRemoteFile({
     url: source.url,
     targetRoot: targets.rawRoot,
     relativePath: path.basename(targets.rawFilePath),
-    logger
+    log
   });
   await copySingleFile(targets.rawFilePath, path.join(targets.scriptRoot, relativePath), targets.scriptRoot);
+  await log(`导入脚本：${relativePath}`);
   return {
     repoPath: `data/raw/${path.basename(targets.rawFilePath)}`,
     files: [relativePath]
@@ -740,17 +882,18 @@ async function writeRemoteFile(input) {
 
   const filePath = path.join(input.targetRoot, safeRelativePath);
   await assertInside(input.targetRoot, filePath);
-  input.logger?.info(`请求远程文件：${input.url}`);
+  await input.log?.(`请求远程文件：${input.url}`);
 
   let content;
   try {
     content = await fetchText(input.url, `下载文件失败: ${safeRelativePath}`);
   } catch (error) {
     if (!input.fallbackUrl || input.fallbackUrl === input.url) throw error;
-    input.logger?.warn(`直连下载失败，切换 ghfast 加速重试：${formatLogError(error)}`);
-    input.logger?.info(`请求 ghfast 加速文件：${input.fallbackUrl}`);
+    await input.log?.(`直连下载失败，切换 ghfast 加速重试：${formatLogError(error)}`);
+    await input.log?.(`请求 ghfast 加速文件：${input.fallbackUrl}`);
     content = await fetchText(input.fallbackUrl, `ghfast 加速下载文件失败: ${safeRelativePath}`);
   }
+
   const size = Buffer.byteLength(content, 'utf8');
   if (size > MAX_SUBSCRIPTION_FILE_BYTES) {
     throw new AppError('SUBSCRIPTION_FILE_TOO_LARGE', `订阅文件过大: ${safeRelativePath}`);
@@ -758,7 +901,7 @@ async function writeRemoteFile(input) {
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, content, 'utf8');
-  input.logger?.success(`保存远程文件：${safeRelativePath}（${formatBytes(size)}）`);
+  await input.log?.(`保存远程文件：${safeRelativePath}，${formatBytes(size)}`);
 }
 
 async function fetchJson(url, errorMessage) {
@@ -822,21 +965,21 @@ async function syncGitRepositoryWithFallback(input) {
   let lastError;
   for (const [index, attempt] of attempts.entries()) {
     if (index > 0) {
-      input.logger?.warn(`GitHub 直连拉取失败，切换 ${attempt.name} 重试`);
+      await input.log?.(`GitHub 直连拉取失败，切换 ${attempt.name} 重试`);
       await rm(input.targetRoot, { recursive: true, force: true });
     }
 
     try {
-      input.logger?.info(`拉取方式：${attempt.name}`);
+      await input.log?.(`拉取方式：${attempt.name}`);
       await syncGitRepository({
         ...input,
         cloneUrl: attempt.cloneUrl
       });
-      if (index > 0) input.logger?.success(`${attempt.name} 拉取成功`);
+      if (index > 0) await input.log?.(`${attempt.name} 拉取成功`);
       return;
     } catch (error) {
       lastError = error;
-      input.logger?.warn(`${attempt.name} 拉取失败：${formatLogError(error)}`);
+      await input.log?.(`${attempt.name} 拉取失败：${formatLogError(error)}`);
     }
   }
 
@@ -855,16 +998,16 @@ async function syncGitRepository(input) {
   await assertInside(path.dirname(input.targetRoot), input.targetRoot);
 
   if (await isGitRepository(input.targetRoot)) {
-    input.logger?.info('检测到已有 Git 仓库，执行增量更新');
+    await input.log?.('检测到已有 Git 仓库，执行增量更新');
     try {
       await updateGitRepository(input);
       return;
     } catch (error) {
-      input.logger?.warn(`增量更新失败，将删除缓存后重新克隆：${formatLogError(error)}`);
+      await input.log?.(`增量更新失败，将删除缓存后重新克隆：${formatLogError(error)}`);
       await rm(input.targetRoot, { recursive: true, force: true });
     }
   } else {
-    input.logger?.info('未检测到本地仓库，执行首次克隆');
+    await input.log?.('未检测到本地仓库，执行首次克隆');
     await rm(input.targetRoot, { recursive: true, force: true });
   }
 
@@ -881,7 +1024,7 @@ async function cloneGitRepository(input) {
     args,
     cwd: path.dirname(input.targetRoot),
     label: '克隆订阅仓库',
-    logger: input.logger
+    log: input.log
   });
 }
 
@@ -892,7 +1035,7 @@ async function updateGitRepository(input) {
     args: ['remote', 'set-url', 'origin', input.cloneUrl],
     cwd: input.targetRoot,
     label: '更新订阅仓库地址',
-    logger: input.logger
+    log: input.log
   });
 
   if (input.branch) {
@@ -902,7 +1045,7 @@ async function updateGitRepository(input) {
       args: ['fetch', '--depth=1', 'origin', input.branch],
       cwd: input.targetRoot,
       label: '拉取订阅仓库分支',
-      logger: input.logger
+      log: input.log
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
@@ -910,7 +1053,7 @@ async function updateGitRepository(input) {
       args: ['checkout', '-B', input.branch, 'FETCH_HEAD'],
       cwd: input.targetRoot,
       label: '切换订阅仓库分支',
-      logger: input.logger
+      log: input.log
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
@@ -918,7 +1061,7 @@ async function updateGitRepository(input) {
       args: ['reset', '--hard', 'FETCH_HEAD'],
       cwd: input.targetRoot,
       label: '重置订阅仓库',
-      logger: input.logger
+      log: input.log
     });
   } else {
     await runGitCommand({
@@ -927,7 +1070,7 @@ async function updateGitRepository(input) {
       args: ['pull', '--ff-only', '--depth=1'],
       cwd: input.targetRoot,
       label: '更新订阅仓库',
-      logger: input.logger
+      log: input.log
     });
     await runGitCommand({
       gitRuntime: input.gitRuntime,
@@ -935,7 +1078,7 @@ async function updateGitRepository(input) {
       args: ['reset', '--hard', 'HEAD'],
       cwd: input.targetRoot,
       label: '重置订阅仓库',
-      logger: input.logger
+      log: input.log
     });
   }
 
@@ -945,7 +1088,7 @@ async function updateGitRepository(input) {
     args: ['clean', '-ffd'],
     cwd: input.targetRoot,
     label: '清理订阅仓库',
-    logger: input.logger
+    log: input.log
   });
 }
 
@@ -961,7 +1104,7 @@ async function isGitRepository(targetRoot) {
 async function runGitCommand(input) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    input.logger?.command(input.label, createGitCommandLine(input.gitRuntime.gitPath, input.args), input.cwd);
+    input.log?.(`${input.label}：${createGitCommandLine(input.gitRuntime.gitPath, input.args)}，cwd=${input.cwd}`);
     const child = spawn(input.gitRuntime.gitPath, input.args, {
       cwd: input.cwd,
       windowsHide: true,
@@ -979,183 +1122,84 @@ async function runGitCommand(input) {
     });
 
     child.on('error', (error) => {
-      input.logger?.error(`${input.label} 启动失败：${error.message}`);
-      reject(new AppError('GIT_COMMAND_SPAWN_FAILED', `${input.label}启动失败: ${error.message}`, {
-        gitPath: input.gitRuntime.gitPath,
-        args: input.args,
-        code: error.code
-      }));
+      reject(new AppError('GIT_COMMAND_FAILED', `${input.label}失败: ${error.message}`));
     });
 
     child.on('close', (code) => {
-      const duration = formatDuration(Date.now() - startedAt);
-      if (stdout.trim()) input.logger?.output('stdout', stdout);
-      if (stderr.trim()) input.logger?.output('stderr', stderr);
+      const durationMs = Date.now() - startedAt;
+      if (stdout.trim()) input.log?.(`Git stdout：${redactLogText(stdout.trim())}`);
+      if (stderr.trim()) input.log?.(`Git stderr：${redactLogText(stderr.trim())}`);
+      input.log?.(`${input.label}结束：exit=${code}，耗时 ${formatDuration(durationMs)}`);
       if (code === 0) {
-        input.logger?.success(`${input.label} 完成（${duration}）`);
-        resolve({ stdout, stderr });
+        resolve();
         return;
       }
-      input.logger?.error(`${input.label} 失败（退出码 ${code}，${duration}）`);
-      reject(new AppError('GIT_COMMAND_FAILED', `${input.label}失败: ${stderr || stdout || `退出码 ${code}`}`, {
-        gitPath: input.gitRuntime.gitPath,
-        args: input.args,
-        exitCode: code,
-        stdout,
-        stderr
-      }));
+      reject(new AppError('GIT_COMMAND_FAILED', `${input.label}失败: ${redactLogText(stderr || stdout || `exit ${code}`)}`));
     });
   });
 }
 
-function createSubscriptionLogger(subscription) {
-  const lines = [];
-  let totalChars = 0;
-  let truncated = false;
-
-  const addLine = (line) => {
-    const safeLine = redactLogText(line);
-    lines.push(safeLine);
-    totalChars += safeLine.length + 1;
-    while (totalChars > MAX_SUBSCRIPTION_LOG_CHARS && lines.length > 1) {
-      const removed = lines.shift();
-      totalChars -= removed.length + 1;
-      truncated = true;
-    }
-  };
-
-  const push = (level, message) => {
-    const timestamp = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
-    const text = String(message ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    for (const line of text.split('\n')) {
-      addLine(`[${timestamp}] [${level}] ${line}`);
-    }
-  };
-
-  push('信息', `订阅：${subscription?.name || '未命名订阅'}`);
-  push('信息', `地址：${subscription?.url || '-'}`);
-
-  return {
-    info: (message) => push('信息', message),
-    success: (message) => push('成功', message),
-    warn: (message) => push('警告', message),
-    error: (message) => push('错误', message),
-    command: (label, commandLine, cwd) => {
-      push('命令', `${label}\n目录：${cwd || '-'}\n${commandLine}`);
-    },
-    output: (label, output) => {
-      const text = String(output || '').trimEnd();
-      if (text) push(label, text);
-    },
-    toText: () => {
-      const body = lines.join('\n');
-      if (!body) return '暂无日志';
-      return truncated ? `日志过长，已保留最近 ${Math.round(MAX_SUBSCRIPTION_LOG_CHARS / 1024)}KB。\n${body}` : body;
-    }
-  };
-}
-
-function describeSubscriptionSource(source) {
-  if (source.type === 'github-repo') {
-    const branch = source.branch ? `，分支 ${source.branch}` : '';
-    const subPath = source.subPath ? `，目录 ${source.subPath}` : '';
-    return `GitHub 仓库 ${source.owner}/${source.repo}${branch}${subPath}`;
-  }
-  if (source.type === 'github-file' || source.type === 'github-raw-file') {
-    const branch = source.branch ? `，分支 ${source.branch}` : '';
-    return `GitHub 文件 ${source.owner}/${source.repo}/${source.repoPath}${branch}`;
-  }
-  if (source.type === 'http-file') {
-    return `HTTP 文件 ${source.fileName}`;
-  }
-  return source.type || '未知类型';
-}
-
-function logFileList(logger, title, files = []) {
-  if (!logger || !files.length) return;
-  const visibleFiles = files.slice(0, 80);
-  logger.info(`${title}：${files.length} 个文件`);
-  for (const file of visibleFiles) {
-    logger.info(`  - ${file}`);
-  }
-  if (files.length > visibleFiles.length) {
-    logger.info(`  ... 还有 ${files.length - visibleFiles.length} 个文件未展开显示`);
-  }
-}
-
 function createGitCommandLine(gitPath, args = []) {
-  const command = path.basename(gitPath || 'git') || 'git';
-  return [command, ...args].map(formatCommandPart).join(' ');
+  return [gitPath, ...args].map(formatCommandPart).join(' ');
 }
 
 function formatCommandPart(value) {
   const text = String(value ?? '');
-  if (!text) return '""';
-  if (!/[\s"]/u.test(text)) return text;
-  return `"${text.replaceAll('"', '\\"')}"`;
+  if (!text || /[\s"]/u.test(text)) return `"${text.replaceAll('"', '\\"')}"`;
+  return text;
 }
 
 function formatLogError(error) {
-  const message = error instanceof AppError ? error.message : String(error?.message || error);
-  return redactLogText(message).split('\n').slice(0, 12).join('\n');
+  return error instanceof AppError ? error.message : String(error?.message || error);
 }
 
 function redactLogText(value) {
-  return String(value ?? '')
-    .replace(/\b(pt_key=)[^;&\s]+/gi, '$1***')
-    .replace(/\b(pt_pin=)[^;&\s]+/gi, '$1***')
-    .replace(/([?&](?:access_token|token|key|password|passwd|pwd)=)[^&#\s]+/gi, '$1***')
-    .replace(/\b(https?:\/\/)([^/\s:@]+):([^/\s@]+)@/gi, '$1***@')
-    .replace(/\b(Authorization:\s*(?:Bearer|token)\s+)[^\s]+/gi, '$1***');
+  return String(value || '')
+    .replace(/pt_key=[^;\s]+/gi, 'pt_key=***')
+    .replace(/pt_pin=[^;\s]+/gi, 'pt_pin=***');
 }
 
 function formatDuration(durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs < 0) return '0ms';
-  if (durationMs < 1000) return `${Math.round(durationMs)}ms`;
-  if (durationMs < 60000) return `${(durationMs / 1000).toFixed(1)}s`;
-  const minutes = Math.floor(durationMs / 60000);
-  const seconds = Math.round((durationMs % 60000) / 1000);
-  return `${minutes}m ${seconds}s`;
+  if (!Number.isFinite(durationMs)) return '-';
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 function formatBytes(value) {
-  const size = Number(value) || 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+  if (!Number.isFinite(value)) return '-';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function createGitProcessEnv(paths, gitRuntime) {
+  const gitRoot = gitRuntime.gitRoot;
   const env = createPortableProcessEnv(paths, {
+    PATH: [
+      path.dirname(gitRuntime.gitPath),
+      gitRoot && path.join(gitRoot, 'cmd'),
+      gitRoot && path.join(gitRoot, 'mingw64', 'bin'),
+      gitRoot && path.join(gitRoot, 'usr', 'bin'),
+      process.env.PATH || ''
+    ].filter(Boolean).join(path.delimiter),
     GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: path.join(paths.dataRoot, 'configs', '.gitconfig'),
-    GCM_INTERACTIVE: 'never',
-    GIT_ASKPASS: 'echo'
+    GCM_INTERACTIVE: 'Never',
+    GIT_ASKPASS: 'echo',
+    SSH_ASKPASS: 'echo'
   });
-  const pathParts = [];
-  if (gitRuntime.gitRoot) {
-    pathParts.push(
-      path.join(gitRuntime.gitRoot, 'cmd'),
-      path.join(gitRuntime.gitRoot, 'mingw64', 'bin'),
-      path.join(gitRuntime.gitRoot, 'usr', 'bin')
-    );
-  }
-  pathParts.push(env.Path || env.PATH || '');
-  return {
-    ...env,
-    PATH: pathParts.filter(Boolean).join(path.delimiter),
-    Path: pathParts.filter(Boolean).join(path.delimiter)
-  };
+  env.HOME = path.join(paths.dataRoot, 'home');
+  env.USERPROFILE = path.join(paths.dataRoot, 'home');
+  return env;
 }
 
 async function assertDirectoryExists(directoryPath, code, message) {
   try {
-    const directoryStat = await stat(directoryPath);
-    if (!directoryStat.isDirectory()) throw new Error('not directory');
+    const fileStat = await stat(directoryPath);
+    if (fileStat.isDirectory()) return;
   } catch {
-    throw new AppError(code, message, { path: directoryPath });
+    // Throw normalized app error below.
   }
+  throw new AppError(code, message);
 }
 
 async function listPullableRepositoryFiles(input, current = input.sourceRoot, items = []) {
@@ -1164,12 +1208,11 @@ async function listPullableRepositoryFiles(input, current = input.sourceRoot, it
   for (const entry of entries) {
     if (items.length >= MAX_REPOSITORY_FILES) break;
     if (entry.name === '.git') continue;
-
     const fullPath = path.join(current, entry.name);
     if (entry.isDirectory()) {
       await listPullableRepositoryFiles(input, fullPath, items);
     } else if (entry.isFile()) {
-      const relativePath = path.relative(input.sourceRoot, fullPath).replaceAll(path.sep, '/');
+      const relativePath = normalizeRelativePath(path.relative(input.sourceRoot, fullPath));
       if (pathShouldBePulled(relativePath, input.filters)) {
         items.push({ path: relativePath });
       }
@@ -1177,7 +1220,6 @@ async function listPullableRepositoryFiles(input, current = input.sourceRoot, it
   }
   return items;
 }
-
 function pathShouldBePulled(value, filters = {}) {
   const normalized = normalizeRelativePath(value);
   const basename = path.posix.basename(normalized).toLowerCase();
@@ -1234,6 +1276,143 @@ function normalizeRelativePath(value) {
 function getSubscriptionSourceCachePath(source, subscriptionFolder) {
   if (source?.type === 'http-file') return `data/raw/${subscriptionFolder}.js`;
   return `data/repo/${subscriptionFolder}`;
+}
+
+function createSubscriptionRun(paths, subscription) {
+  const taskId = `subscription:${subscription.id}`;
+  const scriptPath = subscription.localPath || `data/scripts/${subscription.subscriptionFolder || sanitizePathPart(subscription.name) || 'subscription'}`;
+  const run = Run.start({
+    taskId,
+    name: `订阅：${subscription.name || subscription.id}`,
+    scriptPath,
+    trigger: 'subscription',
+    runtime: {
+      type: 'subscription',
+      name: 'ScriptPilot 订阅拉取'
+    },
+    dependencyCheck: {
+      status: '订阅拉取无需脚本依赖预检',
+      reason: '订阅运行只负责下载和导入脚本文件'
+    },
+    stdoutPath: '',
+    stderrPath: ''
+  });
+  const logDir = path.join(paths.taskLogsRoot, 'subscriptions', sanitizePathPart(subscription.id));
+  const stdoutPath = path.join(logDir, `${run.id}.stdout.log`);
+  const stderrPath = path.join(logDir, `${run.id}.stderr.log`);
+  run.stdoutPath = toPortablePath(paths, stdoutPath, { label: '标准输出日志路径' });
+  run.stderrPath = toPortablePath(paths, stderrPath, { label: '错误日志路径' });
+  return { run, stdoutPath, stderrPath };
+}
+
+async function appendSubscriptionLog(filePath, message) {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await appendFile(filePath, `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${message}\n`, 'utf8');
+}
+
+function markRunSucceeded(run) {
+  const endedAt = new Date().toISOString();
+  run.status = 'success';
+  run.endedAt = endedAt;
+  run.durationMs = new Date(endedAt).getTime() - new Date(run.startedAt).getTime();
+  run.exitCode = 0;
+  run.signal = undefined;
+  run.errorMessage = undefined;
+}
+
+function markRunFailed(run, error) {
+  const normalizedError = error instanceof Error ? error : new Error(String(error));
+  run.markFailed(normalizedError);
+  run.exitCode = 1;
+}
+
+function describeSubscriptionSource(source) {
+  if (source?.type === 'github-repo') {
+    const branch = source.branch ? `#${source.branch}` : '';
+    const subPath = source.subPath ? `/${source.subPath}` : '';
+    return `GitHub 仓库 ${source.owner}/${source.repo}${subPath}${branch}`;
+  }
+  if (source?.type === 'github-file' || source?.type === 'github-raw-file') {
+    return `GitHub 文件 ${source.owner}/${source.repo}/${source.repoPath}`;
+  }
+  if (source?.type === 'http-file') return `HTTP 文件 ${source.url}`;
+  return '未知订阅源';
+}
+
+function extractScriptCron(content) {
+  const text = String(content || '').split(/\r?\n/).slice(0, 160).join('\n');
+  const quotedMatch = text.match(/^\s*(?:\/\/|\/\*|\*|#)?\s*cron\s+["']([^"']+)["'](?:\s+([^,\s]+))?(?:.*?tag[:：]\s*([^\r\n]+))?/im);
+  if (quotedMatch) {
+    const cron = normalizeScriptCron(quotedMatch[1]);
+    if (cron) {
+      return {
+        cron,
+        rawCron: quotedMatch[1],
+        name: normalizeTaskName(quotedMatch[3]) || normalizeTaskName(quotedMatch[2])
+      };
+    }
+  }
+
+  const colonMatch = text.match(/^\s*(?:\/\/|\/\*|\*|#)?\s*@?cron\s*[:=]\s*([^\r\n]+)/im);
+  if (colonMatch) {
+    const raw = colonMatch[1].trim();
+    const cron = normalizeScriptCron(raw);
+    if (cron) {
+      return {
+        cron,
+        rawCron: raw
+      };
+    }
+  }
+
+  const atCronMatch = text.match(/^\s*(?:\/\/|\/\*|\*|#)?\s*@cron\s+([^\r\n]+)/im);
+  if (atCronMatch) {
+    const raw = atCronMatch[1].trim();
+    const cron = normalizeScriptCron(raw);
+    if (cron) {
+      return {
+        cron,
+        rawCron: raw
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeScriptCron(value) {
+  const cronTokens = String(value || '')
+    .replace(/^["']|["']$/g, '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((token) => /^[\d*,/\-]+$/.test(token));
+  if (cronTokens.length < 5) return '';
+  const fields = cronTokens.length >= 6 ? cronTokens.slice(1, 6) : cronTokens.slice(0, 5);
+  return fields.join(' ');
+}
+
+function normalizeTaskName(value) {
+  const name = String(value || '')
+    .replace(/\.(cjs|mjs|js)$/i, '')
+    .replace(/^jd_/, '')
+    .replace(/[^\p{L}\p{N}._ -]+/gu, ' ')
+    .trim();
+  return name || '';
+}
+
+function createTaskNameFromScriptPath(scriptPath) {
+  return normalizeTaskName(path.posix.basename(String(scriptPath || ''))) || '订阅脚本任务';
+}
+
+function formatAutoCreateTaskSummary(summary) {
+  if (!summary?.enabled) return '';
+  const parts = [];
+  if (summary.created) parts.push(`自动创建 ${summary.created} 个任务`);
+  if (summary.skippedExisting) parts.push(`跳过已存在 ${summary.skippedExisting} 个`);
+  if (summary.skippedNoCron) parts.push(`无 cron ${summary.skippedNoCron} 个`);
+  if (summary.skippedInvalidCron) parts.push(`无效 cron ${summary.skippedInvalidCron} 个`);
+  return parts.join('，');
 }
 
 function createSubscriptionFolder(name, id, source = undefined) {
@@ -1395,3 +1574,4 @@ async function runNpmCommand(nodePath, npmArgs, paths) {
     });
   });
 }
+

@@ -1,6 +1,8 @@
 node_modules/
+.tools/
 data/
-release/win-unpacked/
+release/
+runtime/refs/qinglong/
 release/builder-debug.yml
 *.log
 *.tmp

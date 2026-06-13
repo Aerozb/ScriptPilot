@@ -1,63 +1,105 @@
 # ScriptPilot
 
-ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器，定位是“本机无账号版青龙面板”：直接打开 EXE，管理定时任务、脚本、订阅、环境变量、配置文件、依赖和运行日志。
+ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器。它不需要登录账号，也不需要额外安装 Node，解压后双击启动，就能在本机管理脚本、定时任务、订阅、环境变量、依赖和运行日志。
 
-## 特性
+## 下载和启动
 
-- 绿色便携：发布目录根部只保留 `ScriptPilot.exe` 和 `app/`。
-- 数据不外溢：任务、日志、缓存、依赖、Electron 会话数据都写入 `app/data`。
-- 内置 Node + Git：无需用户额外安装 Node/npm/git。
-- 青龙式订阅：支持 GitHub 仓库、`owner/repo.git`、`ql repo`、`ql raw`；仓库订阅走内置 Git clone/pull。
-- 自动依赖：脚本变更后预检依赖；运行时报缺模块时自动安装并重试。
-- 实时日志：运行后立刻打开日志页，前端 1 秒轮询一次日志，边执行边显示。
-- 本机 API：默认监听 `http://127.0.0.1:18760`，可通过 API 携带参数运行脚本。
-- 无账号权限：没有登录、角色、权限校验，仅面向本机使用。
+1. 在 GitHub Release 下载 `ScriptPilot-win-unpacked.zip`。
+2. 解压到你想放置的位置，例如 `D:\Tools\ScriptPilot`。
+3. 双击最外层的 `ScriptPilot.exe` 启动。
 
-## 下载使用
-
-从 GitHub Release 下载绿色版发布包，解压后目录应为：
+解压后的目录应类似：
 
 ```text
 ScriptPilot.exe
 app/
 ```
 
-双击外层 `ScriptPilot.exe` 启动。不要直接运行 `app/ScriptPilot.exe`，外层启动器会保证绿色目录结构和运行路径正确。
+不要直接运行 `app/ScriptPilot.exe`。外层 `ScriptPilot.exe` 是便携启动器，会保证程序在正确目录下运行。
 
-## 数据目录
+## 数据保存位置
 
-所有程序产生的数据都在：
+ScriptPilot 的数据都保存在程序目录内：
 
 ```text
 app/data/
 ```
 
-常见子目录：
+常见目录：
 
 ```text
 state/          任务、运行记录、设置、环境变量
-scripts/        用户脚本和订阅脚本
+scripts/        你保存的脚本和订阅拉取的脚本
 configs/        配置文件
-logs/           stdout/stderr 和应用日志
+logs/           任务输出日志和应用日志
 node_modules/   自动安装的脚本依赖
-repo/           Git clone 后的仓库订阅缓存
+repo/           Git 仓库订阅缓存
 raw/            Raw 单文件订阅缓存
 cache/          npm 等缓存
 tmp/            临时目录
 ```
 
-首次启动会自动生成 `app/data/README.md`，里面也有每个目录用途说明。
+迁移到新电脑时，保留整个解压目录即可。删除 `app/data` 会清空任务、脚本、变量和日志。
 
-## 实时日志机制
+## 主要功能
 
-ScriptPilot 参考青龙面板的做法：后端运行脚本时持续追加日志文件，前端日志页轮询读取日志。
+### 定时任务
 
-- 青龙定时任务日志弹窗约每 2 秒请求一次日志接口。
-- ScriptPilot 当前每 1 秒刷新一次当前运行日志。
-- 点击运行后 UI 不再等待脚本结束，而是马上获得 `runId` 并打开日志页。
-- 日志列表按脚本分组，组内按运行时间倒序。
+- 支持常规定时、手动运行、开机运行。
+- 新建任务时可以选择已有脚本，也可以填写新脚本内容。
+- 选择已有脚本时支持树型弹窗、多选脚本、批量创建任务。
+- 任务日志用弹窗实时展示，运行后不用等待脚本结束。
+- 任务可以启用、禁用、置顶、运行、停止、查看详情和复制 API。
 
-## 本机 API 示例
+### 脚本管理
+
+- 所有脚本都保存在 `app/data/scripts`。
+- 支持新建、编辑、保存、删除、运行脚本。
+- 左侧脚本列表按目录树展示，适合管理订阅脚本和自写脚本。
+
+### 订阅管理
+
+订阅可以从 GitHub 仓库、GitHub Raw 或普通 HTTP 脚本拉取文件到本地。
+
+支持的常见格式：
+
+```text
+https://github.com/owner/repo.git
+owner/repo.git
+git@github.com:owner/repo.git
+ql repo https://github.com/owner/repo.git "keyword" "" "" ""
+ql raw https://raw.githubusercontent.com/owner/repo/main/demo.js
+```
+
+如果勾选“拉取后按脚本 cron 自动创建任务”，ScriptPilot 会尝试读取脚本里的 cron 声明，并自动创建对应任务。没有 cron 声明或 cron 无效的脚本会跳过。
+
+### 环境变量
+
+- 用于保存脚本运行需要的变量，例如 `JD_COOKIE`。
+- 同名变量会在运行时用 `&` 拼接，兼容常见青龙脚本习惯。
+- 列表中变量值会遮罩显示，避免误操作时直接暴露完整内容。
+
+### 依赖管理
+
+- 脚本运行前会预检常见 `require/import` 依赖。
+- 缺依赖时自动安装到 `app/data/node_modules`。
+- 如果运行时仍报缺模块，会自动尝试安装并重试。
+
+### 日志
+
+- 任务、手动运行和订阅拉取都会生成日志。
+- 运行中的日志会实时刷新并自动滚动到底部。
+- 系统设置里可以配置日志保留天数，也可以手动立即清理。
+
+## 本机 API
+
+ScriptPilot 默认只监听本机地址：
+
+```text
+http://127.0.0.1:18760
+```
+
+示例：直接运行一段脚本。
 
 ```powershell
 $body = @{
@@ -76,29 +118,24 @@ Invoke-RestMethod `
   -Body $body
 ```
 
-更多接口见 [docs/README.md](docs/README.md)。
+## 常见问题
 
-## 开发
+### 启动器图标还是空白
 
-```powershell
-npm install
-npm run dist:dir
-```
+Windows 可能缓存旧图标。可以尝试重新解压、重建快捷方式，或重启资源管理器。
 
-构建产物：
+### 程序变慢
 
-```text
-release/win-unpacked/
-  ScriptPilot.exe
-  app/
-```
+脚本运行、依赖安装、订阅拉取都会占用磁盘和网络。电脑很卡时，建议先关闭正在运行的重任务，再操作批量运行或批量订阅。
 
-项目不生成安装包；`dist:zip` 已禁用。发布压缩包请在 release 目录外另行打包干净产物。
+### 能不能放到移动硬盘
 
-## 验收
+可以。只要保持 `ScriptPilot.exe` 和 `app/` 在同一目录即可。
 
-```powershell
-node tools\human-acceptance.mjs
-```
+### 会不会写入 AppData
 
-验收脚本覆盖中文 UI、脚本运行、定时任务、订阅、依赖自动安装、本机 API、日志清理和绿色目录约束。
+正常使用不会。Electron 会话、缓存、日志、脚本依赖都重定向到 `app/data` 内。
+
+## 注意
+
+ScriptPilot 是本机工具，没有账号体系和权限隔离。不要把它暴露到公网，也不要运行来源不可信的脚本。
