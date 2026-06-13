@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ import { assertValidTaskSchedules } from '../src/main/modules/tasks/application/
 import { JsonSettingsRepository } from '../src/main/modules/settings/infrastructure/json-settings-repository.js';
 import { createAcceleratedUrl, normalizeAcceleratorBaseUrl } from '../src/main/shared/network/url-accelerator.js';
 import { checkGitHubReleaseUpdate, compareVersions, createUpdateDownloadUrl } from '../src/main/modules/updates/infrastructure/github-update-service.js';
+import { startApiServer } from '../src/electron/api-server.js';
 
 const execFileAsync = promisify(execFile);
 const checks = [];
@@ -228,6 +230,25 @@ await check('网络设置保存 GitHub 加速地址且可清空', async () => {
     assert(cleared.network.githubAcceleratorBaseUrl === '', '加速地址应支持清空');
   } finally {
     await rm(portableRoot, { recursive: true, force: true });
+  }
+});
+
+await check('本机接口端口占用会返回可处理错误', async () => {
+  const occupied = http.createServer((_request, response) => {
+    response.end('occupied');
+  });
+  await new Promise((resolve, reject) => {
+    occupied.once('error', reject);
+    occupied.listen(0, '127.0.0.1', resolve);
+  });
+  const port = occupied.address().port;
+  try {
+    await assertRejects(
+      () => startApiServer({}, { port }),
+      '端口占用时接口启动不应成功'
+    );
+  } finally {
+    await new Promise((resolve) => occupied.close(resolve));
   }
 });
 

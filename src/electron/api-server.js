@@ -38,13 +38,25 @@ export function startApiServer(coreApp, options = {}) {
     }
   });
 
-  server.listen(port, host);
-  return {
-    host,
-    port,
-    server,
-    url: `http://${host}:${port}`
-  };
+  return new Promise((resolve, reject) => {
+    let started = false;
+    server.once('error', (error) => {
+      if (!started) {
+        reject(error);
+        return;
+      }
+      console.error(error);
+    });
+    server.listen(port, host, () => {
+      started = true;
+      resolve({
+        host,
+        port,
+        server,
+        url: `http://${host}:${port}`
+      });
+    });
+  });
 }
 
 async function routeRequest(coreApp, request, url) {

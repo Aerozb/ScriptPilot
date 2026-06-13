@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -284,18 +284,7 @@ if (shouldRunSmokeDemo) {
       showMainWindow();
     });
 
-  app.whenReady().then(async () => {
-    coreApp = await createApp({ portableRoot });
-    apiServer = startApiServer(coreApp, {
-      port: readApiPort()
-    });
-    coreApp.scheduler.start();
-    coreApp.services.logCleanupService.start();
-    registerIpc();
-    setupChineseMenu();
-    startsInBackground = app.commandLine.hasSwitch('background') || process.argv.includes('--background');
-    await createMainWindow({ show: !startsInBackground });
-  });
+    app.whenReady().then(() => bootstrapApp(portableRoot)).catch((error) => handleStartupError(portableRoot, error));
 
     app.on('window-all-closed', () => {
       if (process.platform !== 'darwin') {
@@ -308,6 +297,62 @@ if (shouldRunSmokeDemo) {
 function readApiPort() {
   const value = Number(process.env.SCRIPTPILOT_API_PORT);
   return Number.isInteger(value) && value > 0 && value <= 65535 ? value : 18760;
+}
+
+async function bootstrapApp(portableRoot) {
+  coreApp = await createApp({ portableRoot });
+  apiServer = await startApiServer(coreApp, {
+    port: readApiPort()
+  });
+  coreApp.scheduler.start();
+  coreApp.services.logCleanupService.start();
+  registerIpc();
+  setupChineseMenu();
+  startsInBackground = app.commandLine.hasSwitch('background') || process.argv.includes('--background');
+  await createMainWindow({ show: !startsInBackground });
+}
+
+async function handleStartupError(portableRoot, error) {
+  const message = formatStartupError(error);
+  console.error(error);
+  await writeStartupError(portableRoot, error, message).catch((writeError) => console.error(writeError));
+  dialog.showErrorBox('ScriptPilot 启动失败', message);
+  app.quit();
+}
+
+function formatStartupError(error) {
+  if (error?.code === 'EADDRINUSE') {
+    const port = readApiPort();
+    return [
+      `本机接口端口 ${port} 已被占用，ScriptPilot 无法启动。`,
+      '',
+      '通常是旧目录或另一个 ScriptPilot 实例还在运行。',
+      '请先关闭正在运行的 ScriptPilot，再重新打开当前目录的 ScriptPilot.exe。'
+    ].join('\n');
+  }
+
+  return [
+    '启动过程中发生错误。',
+    '',
+    error?.message || String(error),
+    '',
+    '详细信息已写入 data/logs/app/startup-error.log。'
+  ].join('\n');
+}
+
+async function writeStartupError(portableRoot, error, message) {
+  const logPath = path.join(portableRoot, 'data', 'logs', 'app', 'startup-error.log');
+  await mkdir(path.dirname(logPath), { recursive: true });
+  await writeFile(logPath, `${JSON.stringify({
+    writtenAt: new Date().toISOString(),
+    message,
+    error: {
+      name: error?.name,
+      message: error?.message,
+      code: error?.code,
+      stack: error?.stack
+    }
+  }, null, 2)}\n`, 'utf8');
 }
 
 function isAcceptanceTestMode() {
