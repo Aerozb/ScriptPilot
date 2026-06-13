@@ -1,5 +1,7 @@
 const api = window.scriptPilot;
 const SCRIPT_FILE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
+const TASK_SORT_FALLBACK = { field: 'pinned', direction: 'DESC' };
+const TASK_SORTABLE_FIELDS = new Set(['name', 'cronExpression', 'lastDuration', 'lastStartedAt', 'nextRunAt', 'pinned']);
 
 const pageMeta = {
   crontab: ['定时任务', '青龙式任务表格，支持批量运行、启停、删除和查看日志。'],
@@ -468,8 +470,8 @@ function renderTasks() {
         <tr>
           <th class="check-col"><input id="selectAllTasksInput" type="checkbox" ${allSelected ? 'checked' : ''}></th>
           <th style="width: 150px">${renderSortHeader('name', '名称')}</th>
-          <th style="width: 260px">${renderSortHeader('scriptPath', '命令/脚本')}</th>
-          <th style="width: 108px">${renderSortHeader('status', '状态')}</th>
+          <th style="width: 260px">命令/脚本</th>
+          <th style="width: 108px">状态</th>
           <th style="width: 146px">${renderSortHeader('cronExpression', '定时规则')}</th>
           <th style="width: 132px">${renderSortHeader('lastDuration', '最后运行时长')}</th>
           <th style="width: 160px">${renderSortHeader('lastStartedAt', '最后运行时间')}</th>
@@ -491,6 +493,7 @@ function renderTaskRow(task) {
   const selected = state.selectedTaskIds.has(task.id);
   const isMutating = state.taskMutatingIds.has(task.id);
   const rowClass = [selected ? 'selected' : '', task.pinned ? 'pinned-row' : '', isMutating ? 'mutating-row' : ''].filter(Boolean).join(' ');
+  const displayScriptPath = formatTaskScriptPath(task.scriptPath);
   const status = isMutating
     ? { value: 'mutating', label: '处理中', className: 'amber' }
     : task.statusInfo;
@@ -500,7 +503,7 @@ function renderTaskRow(task) {
     <tr class="${rowClass}" data-task-row="${escapeAttr(task.id)}">
       <td class="check-col"><input type="checkbox" data-task-check="${escapeAttr(task.id)}" ${selected ? 'checked' : ''}></td>
       <td class="name-col" title="${escapeAttr(task.name)}"><button class="link-button name-link" data-detail-task="${escapeAttr(task.id)}">${task.pinned ? '<span class="pin-text">置顶</span>' : ''}${escapeHtml(task.name)}</button></td>
-      <td class="path-col" title="${escapeAttr(task.scriptPath)}"><button class="link-button path-link" data-open-task-script="${escapeAttr(task.id)}">${escapeHtml(task.scriptPath)}</button></td>
+      <td class="path-col" title="${escapeAttr(task.scriptPath)}"><button class="link-button path-link" data-open-task-script="${escapeAttr(task.id)}">${escapeHtml(displayScriptPath)}</button></td>
       <td>
         <span class="tag ${status.className}">${escapeHtml(status.label)}</span>
       </td>
@@ -667,7 +670,7 @@ function getTaskFilterText(task, property) {
 }
 
 function sortTaskRows(rows) {
-  const { field, direction } = state.taskSort || { field: 'pinned', direction: 'DESC' };
+  const { field, direction } = normalizeTaskSort(state.taskSort);
   const factor = direction === 'ASC' ? 1 : -1;
   return [...rows].sort((a, b) => {
     if (a.pinned !== b.pinned && field !== 'pinned') return a.pinned ? -1 : 1;
@@ -677,10 +680,16 @@ function sortTaskRows(rows) {
   });
 }
 
+function normalizeTaskSort(sort) {
+  if (!sort || !TASK_SORTABLE_FIELDS.has(sort.field)) return { ...TASK_SORT_FALLBACK };
+  return {
+    field: sort.field,
+    direction: sort.direction === 'ASC' ? 'ASC' : 'DESC'
+  };
+}
+
 function compareTaskField(a, b, field) {
   if (field === 'name') return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
-  if (field === 'scriptPath') return String(a.scriptPath || '').localeCompare(String(b.scriptPath || ''), 'zh-CN');
-  if (field === 'status') return String(a.statusInfo.label || '').localeCompare(String(b.statusInfo.label || ''), 'zh-CN');
   if (field === 'cronExpression') return String(a.cronExpression || '').localeCompare(String(b.cronExpression || ''), 'zh-CN');
   if (field === 'lastDuration') return Number(a.latestRun?.durationMs || 0) - Number(b.latestRun?.durationMs || 0);
   if (field === 'lastStartedAt') return new Date(a.latestRun?.startedAt || 0).getTime() - new Date(b.latestRun?.startedAt || 0).getTime();
@@ -699,10 +708,17 @@ function renderSortHeader(field, label) {
 }
 
 async function changeTaskSort(field) {
+  if (!TASK_SORTABLE_FIELDS.has(field)) return;
   const direction = state.taskSort?.field === field && state.taskSort.direction === 'ASC' ? 'DESC' : 'ASC';
   state.taskSort = { field, direction };
   await saveCrontabSettings();
   renderTasks();
+}
+
+function formatTaskScriptPath(scriptPath) {
+  const normalized = String(scriptPath || '').replaceAll('\\', '/');
+  if (normalized.startsWith('data/scripts/')) return normalized.slice('data/scripts/'.length) || normalized;
+  return normalized || '-';
 }
 
 function renderTaskPagination(total, currentCount) {
@@ -1563,7 +1579,7 @@ function renderTaskDetail(task, latestRun) {
   const status = getTaskStatus(task, latestRun);
   const pairs = [
     ['名称', task.name],
-    ['命令/脚本', task.scriptPath],
+    ['命令/脚本', formatTaskScriptPath(task.scriptPath)],
     ['状态', status.label],
     ['定时规则', formatScheduleTitle(task)],
     ['下次运行', formatNextRun(task)],
@@ -3287,7 +3303,7 @@ function applyCrontabSettings(crontab = {}) {
   const normalized = {
     activeViewId: crontab.activeViewId || 'all',
     pageSize: Number(crontab.pageSize) || 20,
-    sort: crontab.sort || { field: 'pinned', direction: 'DESC' },
+    sort: normalizeTaskSort(crontab.sort),
     views: Array.isArray(crontab.views) ? crontab.views : []
   };
   state.settings = {
@@ -3304,14 +3320,14 @@ async function saveCrontabSettings(patch = {}) {
     ...(state.settings?.crontab || {}),
     activeViewId: state.settings?.crontab?.activeViewId || 'all',
     pageSize: state.taskPageSize,
-    sort: state.taskSort,
+    sort: normalizeTaskSort(state.taskSort),
     views: getCrontabViews(),
     ...patch
   };
   const saved = await api.saveSettings(mergeSettings({ crontab: nextCrontab }));
   state.settings = saved;
   state.taskPageSize = saved.crontab.pageSize;
-  state.taskSort = saved.crontab.sort;
+  state.taskSort = normalizeTaskSort(saved.crontab.sort);
   els.taskPageSizeInput.value = String(saved.crontab.pageSize);
 }
 
