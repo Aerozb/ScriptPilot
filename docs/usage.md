@@ -129,6 +129,67 @@ console.log(new Date().toLocaleString());
 
 任务表单里部分字段旁边有信息图标。鼠标移上去、键盘聚焦或点击图标时，会显示这个字段的用途说明；按 `Esc` 可以关闭提示。
 
+### 命令行参数和结构化参数怎么填
+
+这两个字段都是把额外数据传给脚本，但用途不同。
+
+“命令行参数，每行一个”适合简单字符串、开关、编号、模式名。每一行会变成一个参数，脚本里用 `process.argv.slice(2)` 读取。
+
+例如表单里这样填：
+
+```text
+--mode=prod
+jd_001
+3
+```
+
+脚本里这样读：
+
+```js
+const args = process.argv.slice(2);
+console.log(args);
+```
+
+脚本拿到的结果是：
+
+```json
+["--mode=prod", "jd_001", "3"]
+```
+
+注意：命令行参数都是字符串。上面的 `3` 到脚本里也是字符串 `"3"`，需要数字时自己用 `Number(args[2])` 转换。
+
+“结构化参数 JSON”适合一组有名字的配置，比如账号、开关、重试次数、关键词列表。必须填写合法 JSON 对象，脚本里用 `process.env.SCRIPTPILOT_PARAMS` 读取后再 `JSON.parse`。
+
+例如表单里这样填：
+
+```json
+{
+  "账号": "jd_001",
+  "重试次数": 3,
+  "通知": true,
+  "关键词": ["签到", "福利"]
+}
+```
+
+脚本里这样读：
+
+```js
+const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
+console.log(params.账号);
+console.log(params.重试次数);
+console.log(params.通知);
+console.log(params.关键词);
+```
+
+脚本拿到的 `params` 是一个对象，数字还是数字，布尔值还是布尔值，数组还是数组。
+
+选择建议：
+
+- 只有一两个简单值，用“命令行参数”。
+- 有多个配置项，或者要传数字、布尔值、数组，用“结构化参数 JSON”。
+- 两个字段可以同时用，脚本分别从 `process.argv.slice(2)` 和 `process.env.SCRIPTPILOT_PARAMS` 读取。
+- 不需要传参数时，命令行参数留空，结构化参数保持 `{}` 或默认示例即可。
+
 ## 7. Cron 表达式生成器
 
 Cron 用来表示“什么时候运行任务”。不会写也没关系，点击任务弹窗里的“生成表达式”即可。
@@ -226,6 +287,8 @@ ScriptPilot 使用 5 段 Cron：
 - 工作目录。
 - 声明依赖。
 - 缺依赖时自动安装。
+
+这里的“命令行参数”和“结构化参数 JSON”用法与创建任务一致：简单值用命令行参数，多项配置用 JSON 参数。
 
 输入错误时会提示，例如 JSON 格式错误、路径不在便携目录内、路径不是 `.js` 文件等。
 

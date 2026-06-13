@@ -344,8 +344,10 @@ try {
 
       const argsHelp = page.locator('#taskModal .help-icon[aria-label="命令行参数说明"]');
       await argsHelp.click();
-      await expectText(page, '#helpTooltip', '每一行都会作为一个命令行参数');
+      await expectText(page, '#helpTooltip', '适合传简单字符串、开关或编号');
       assert(await argsHelp.getAttribute('aria-expanded') === 'true', '字段提示点击后没有标记展开状态');
+      await expectText(page, '#taskModal', 'process.argv.slice(2)');
+      await expectText(page, '#taskModal', 'SCRIPTPILOT_PARAMS');
     } finally {
       await closeDialogIfOpen(page, '#taskModal');
     }

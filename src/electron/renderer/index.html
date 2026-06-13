@@ -363,10 +363,10 @@ Content-Type: application/json
           <label id="taskScriptContentField" class="full" hidden><span>脚本内容</span><textarea id="taskScriptContentInput" rows="9">const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");
 console.log("定时任务执行成功");
 console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));</textarea></label>
-          <label><span class="label-with-help">命令行参数，每行一个<button class="help-icon" type="button" aria-label="命令行参数说明" aria-expanded="false" data-tooltip="每一行都会作为一个命令行参数传给脚本，脚本里用 process.argv.slice(2) 读取；不需要参数可以留空。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><textarea id="taskArgsInput" rows="4"></textarea></label>
-          <label><span class="label-with-help">结构化参数 JSON<button class="help-icon" type="button" aria-label="结构化参数说明" aria-expanded="false" data-tooltip="必须填写 JSON 对象。运行时会写入环境变量 SCRIPTPILOT_PARAMS，脚本可用 JSON.parse(process.env.SCRIPTPILOT_PARAMS || '{}') 读取。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><textarea id="taskParamsInput" rows="4">{
+          <label><span class="label-with-help">命令行参数，每行一个<button class="help-icon" type="button" aria-label="命令行参数说明" aria-expanded="false" data-tooltip="适合传简单字符串、开关或编号。每一行会变成一个命令行参数，脚本用 process.argv.slice(2) 读取。例如填写 --mode=prod 和 jd_001，脚本拿到 [&quot;--mode=prod&quot;, &quot;jd_001&quot;]；不需要就留空。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><textarea id="taskArgsInput" rows="4" placeholder="--mode=prod&#10;jd_001&#10;3"></textarea><small class="field-example">适合简单字符串或开关。示例填三行：--mode=prod、jd_001、3，脚本里 `process.argv.slice(2)` 得到 ["--mode=prod", "jd_001", "3"]。</small></label>
+          <label><span class="label-with-help">结构化参数 JSON<button class="help-icon" type="button" aria-label="结构化参数说明" aria-expanded="false" data-tooltip="适合传一组有名字的配置，必须是 JSON 对象，可包含字符串、数字、布尔值、数组或嵌套对象。运行时写入 SCRIPTPILOT_PARAMS，脚本用 JSON.parse(process.env.SCRIPTPILOT_PARAMS || '{}') 读取。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><textarea id="taskParamsInput" rows="4">{
   "来源": "定时任务"
-}</textarea></label>
+}</textarea><small class="field-example">适合多项配置。示例：{"账号":"jd_001","重试次数":3,"通知":true}，脚本里 `JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}")` 得到对象。</small></label>
           <label><span class="label-with-help">工作目录<button class="help-icon" type="button" aria-label="工作目录说明" aria-expanded="false" data-tooltip="脚本运行时的当前目录，默认 data。只能填写安装目录内的相对路径，脚本读写相对文件时会从这里开始。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><input id="taskCwdInput" value="data" /></label>
           <label><span>超时毫秒，0 表示不限制</span><input id="taskTimeoutInput" type="number" min="0" value="30000" /></label>
           <label><span class="label-with-help">额外定时规则，每行一个<button class="help-icon" type="button" aria-label="额外定时规则说明" aria-expanded="false" data-tooltip="同一个任务除了主 Cron 外，还可以额外添加多个触发时间。每行一个 5 段 Cron，不支持 @once 或 @boot。"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.4-3 4"></path><path d="M12 17h.01"></path></svg></button></span><textarea id="taskExtraSchedulesInput" rows="3" placeholder="0 8 * * *&#10;0 20 * * *"></textarea></label>
@@ -570,10 +570,10 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
 console.log("直接运行成功");
 console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea></label>
           <label><span>命令行参数，每行一个</span><textarea id="runArgsInput" rows="4">参数A
-参数B</textarea></label>
+参数B</textarea><small class="field-example">适合简单字符串或开关。示例填两行：--mode=test、jd_001，脚本里 `process.argv.slice(2)` 得到 ["--mode=test", "jd_001"]。</small></label>
           <label><span>结构化参数 JSON</span><textarea id="runParamsInput" rows="4">{
   "来源": "界面"
-}</textarea></label>
+}</textarea><small class="field-example">适合对象配置。示例：{"账号":"jd_001","重试次数":3,"通知":true}，脚本里读取 `process.env.SCRIPTPILOT_PARAMS` 后 JSON.parse。</small></label>
           <label><span>工作目录</span><input id="runCwdInput" value="data" /></label>
           <label><span>依赖，每行一个</span><textarea id="runDependenciesInput" rows="3" placeholder="axios&#10;dayjs"></textarea></label>
           <label class="check-line full"><input id="runAutoInstallInput" type="checkbox" checked />缺依赖时自动安装到 data/node_modules</label>
