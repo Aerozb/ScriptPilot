@@ -67,14 +67,17 @@ let logCleanupSaveSeq = 0;
 let scriptSplitResize;
 let logRefreshTimer;
 let taskLogRefreshTimer;
+let taskLogRefreshSettleTicks = 0;
 let subscriptionLogRefreshTimer;
 let taskScriptPickerRenderFrame;
 let envRenderFrame;
 let cronGeneratorExpression = '*/5 * * * *';
+let activeTooltipTrigger;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindElements();
   bindEvents();
+  initHelpTooltips();
   initScriptSplitResize();
   init().catch(showFatalError);
 });
@@ -298,6 +301,119 @@ function initScriptSplitResize() {
   };
   els.scriptSplitResizer.addEventListener('pointerup', finishResize);
   els.scriptSplitResizer.addEventListener('pointercancel', finishResize);
+}
+
+function initHelpTooltips() {
+  ensureHelpTooltip();
+  document.addEventListener('pointerover', (event) => {
+    const trigger = getHelpTooltipTrigger(event.target);
+    if (!trigger || isInsideNode(trigger, event.relatedTarget)) return;
+    showHelpTooltip(trigger);
+  });
+  document.addEventListener('pointerout', (event) => {
+    const trigger = getHelpTooltipTrigger(event.target);
+    if (!trigger || isInsideNode(trigger, event.relatedTarget)) return;
+    hideHelpTooltip(trigger);
+  });
+  document.addEventListener('focusin', (event) => {
+    const trigger = getHelpTooltipTrigger(event.target);
+    if (trigger) showHelpTooltip(trigger);
+  });
+  document.addEventListener('focusout', (event) => {
+    const trigger = getHelpTooltipTrigger(event.target);
+    if (trigger) hideHelpTooltip(trigger);
+  });
+  document.addEventListener('click', (event) => {
+    const trigger = getHelpTooltipTrigger(event.target);
+    if (!trigger) return;
+    event.preventDefault();
+    showHelpTooltip(trigger);
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!getHelpTooltipTrigger(event.target)) hideHelpTooltip(activeTooltipTrigger);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !activeTooltipTrigger) return;
+    event.preventDefault();
+    event.stopPropagation();
+    hideHelpTooltip(activeTooltipTrigger);
+  }, true);
+  window.addEventListener('resize', () => positionHelpTooltip(activeTooltipTrigger));
+  document.addEventListener('scroll', () => positionHelpTooltip(activeTooltipTrigger), true);
+}
+
+function getHelpTooltipTrigger(target) {
+  if (!(target instanceof Element)) return undefined;
+  return target.closest('[data-tooltip]');
+}
+
+function isInsideNode(parent, target) {
+  return target instanceof Node && parent.contains(target);
+}
+
+function ensureHelpTooltip() {
+  let tooltip = document.getElementById('helpTooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'helpTooltip';
+    tooltip.className = 'tooltip-layer';
+    tooltip.setAttribute('role', 'tooltip');
+    tooltip.setAttribute('aria-hidden', 'true');
+    tooltip.hidden = true;
+    document.body.append(tooltip);
+  }
+  els.helpTooltip = tooltip;
+  return tooltip;
+}
+
+function showHelpTooltip(trigger) {
+  if (!trigger?.dataset?.tooltip) return;
+  const tooltip = ensureHelpTooltip();
+  activeTooltipTrigger = trigger;
+  tooltip.textContent = trigger.dataset.tooltip;
+  tooltip.style.visibility = 'hidden';
+  tooltip.hidden = false;
+  tooltip.setAttribute('aria-hidden', 'false');
+  trigger.setAttribute('aria-describedby', tooltip.id);
+  trigger.setAttribute('aria-expanded', 'true');
+  positionHelpTooltip(trigger);
+  tooltip.style.visibility = 'visible';
+}
+
+function hideHelpTooltip(trigger) {
+  if (trigger && trigger !== activeTooltipTrigger) return;
+  const tooltip = ensureHelpTooltip();
+  tooltip.hidden = true;
+  tooltip.setAttribute('aria-hidden', 'true');
+  tooltip.style.visibility = '';
+  activeTooltipTrigger?.removeAttribute('aria-describedby');
+  activeTooltipTrigger?.setAttribute('aria-expanded', 'false');
+  activeTooltipTrigger = undefined;
+}
+
+function positionHelpTooltip(trigger) {
+  if (!trigger || !els.helpTooltip || els.helpTooltip.hidden) return;
+  const tooltip = els.helpTooltip;
+  const margin = 12;
+  const gap = 10;
+  const triggerRect = trigger.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const center = triggerRect.left + triggerRect.width / 2;
+  let left = center - tooltipRect.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+
+  let top = triggerRect.bottom + gap;
+  let placement = 'bottom';
+  if (top + tooltipRect.height + margin > window.innerHeight) {
+    top = triggerRect.top - tooltipRect.height - gap;
+    placement = 'top';
+  }
+
+  tooltip.dataset.placement = placement;
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
+  const arrowLeft = clamp(center - left, 14, tooltipRect.width - 14);
+  tooltip.style.setProperty('--tooltip-arrow-left', `${Math.round(arrowLeft)}px`);
 }
 
 function setScriptListWidth(width) {
@@ -1710,7 +1826,9 @@ async function openTaskLogModal(runId, taskId) {
     els.taskLogModal.showModal();
   }
   const run = await renderTaskLogModal(runId);
-  if (run?.status === 'running') startTaskLogRefresh(runId);
+  if (run?.status === 'running' || isTaskLogTextPending()) {
+    startTaskLogRefresh(runId, { settleTicks: 5 });
+  }
 }
 
 async function renderTaskLogModal(runId, options = {}) {
@@ -1748,15 +1866,24 @@ async function renderTaskLogModal(runId, options = {}) {
   }
 }
 
-function startTaskLogRefresh(runId) {
+function startTaskLogRefresh(runId, options = {}) {
   stopTaskLogRefresh();
+  taskLogRefreshSettleTicks = options.settleTicks || 0;
   taskLogRefreshTimer = setInterval(async () => {
     if (state.currentTaskLogRunId !== runId || !els.taskLogModal.open) {
       stopTaskLogRefresh();
       return;
     }
     const run = await renderTaskLogModal(runId, { silent: true });
-    if (!run || run.status !== 'running') {
+    if (!run) {
+      stopTaskLogRefresh();
+      return;
+    }
+    if (run.status !== 'running') {
+      if (isTaskLogTextPending() && taskLogRefreshSettleTicks > 0) {
+        taskLogRefreshSettleTicks -= 1;
+        return;
+      }
       stopTaskLogRefresh();
     }
   }, 1000);
@@ -1767,10 +1894,16 @@ function stopTaskLogRefresh() {
     clearInterval(taskLogRefreshTimer);
     taskLogRefreshTimer = undefined;
   }
+  taskLogRefreshSettleTicks = 0;
   if (!els.taskLogModal?.open) {
     state.currentTaskLogRunId = '';
     state.currentTaskLogTaskId = '';
   }
+}
+
+function isTaskLogTextPending() {
+  const text = (els.taskLogViewer?.textContent || '').trim();
+  return text === '日志为空' || text === '运行中，等待脚本输出...';
 }
 
 async function copyTaskLog() {

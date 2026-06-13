@@ -315,6 +315,30 @@ try {
     await page.locator('#taskModal').waitFor({ state: 'hidden' });
   });
 
+  await check('新建任务字段提示可悬停、聚焦和点击显示', async () => {
+    await page.locator('[data-page="crontab"]').click();
+    await page.locator('#newTaskButton').click();
+    try {
+      const cwdHelp = page.locator('#taskModal .help-icon[aria-label="工作目录说明"]');
+      await cwdHelp.hover();
+      await expectText(page, '#helpTooltip', '脚本运行时的当前目录');
+      assert(await page.locator('#helpTooltip').isVisible(), '字段提示悬停后没有显示');
+
+      const logNameHelp = page.locator('#taskModal .help-icon[aria-label="日志名称说明"]');
+      await logNameHelp.focus();
+      await expectText(page, '#helpTooltip', '用于区分日志目录和日志列表显示');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector('#helpTooltip')?.hidden === true);
+
+      const argsHelp = page.locator('#taskModal .help-icon[aria-label="命令行参数说明"]');
+      await argsHelp.click();
+      await expectText(page, '#helpTooltip', '每一行都会作为一个命令行参数');
+      assert(await argsHelp.getAttribute('aria-expanded') === 'true', '字段提示点击后没有标记展开状态');
+    } finally {
+      await closeDialogIfOpen(page, '#taskModal');
+    }
+  });
+
   await check('新建任务表单会拦截错误输入并给出提示', async () => {
     await page.locator('[data-page="crontab"]').click();
     await page.locator('#newTaskButton').click();

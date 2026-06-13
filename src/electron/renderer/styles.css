@@ -1446,28 +1446,105 @@ pre,
 .label-with-help {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .help-icon {
   display: inline-grid;
   place-items: center;
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
-  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  min-height: 0;
+  border: 0;
   border-radius: 999px;
   padding: 0;
-  color: var(--accent-strong);
-  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
-  font-size: 12px;
-  font-weight: 900;
+  color: color-mix(in srgb, var(--muted) 72%, var(--accent));
+  background: transparent;
   line-height: 1;
   cursor: help;
+  opacity: 0.9;
+  transform: none;
 }
 
-.help-icon:hover {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+.help-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.help-icon:hover,
+.help-icon:focus-visible {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  opacity: 1;
+  transform: none;
+}
+
+.help-icon:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  outline-offset: 2px;
+}
+
+.tooltip-layer {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(320px, calc(100vw - 32px));
+  border: 1px solid color-mix(in srgb, var(--ink) 8%, var(--line));
+  border-radius: 10px;
+  padding: 9px 11px;
+  color: #ffffff;
+  background: color-mix(in srgb, var(--ink) 92%, #000000);
+  box-shadow: 0 12px 32px rgba(31, 41, 51, 0.18);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.55;
+  pointer-events: none;
+  animation: tooltip-pop 120ms ease-out;
+}
+
+.tooltip-layer[hidden] {
+  display: none;
+}
+
+.tooltip-layer::after {
+  content: "";
+  position: absolute;
+  left: var(--tooltip-arrow-left, 50%);
+  width: 9px;
+  height: 9px;
+  background: inherit;
+  border: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.tooltip-layer[data-placement="bottom"]::after {
+  top: -5px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.tooltip-layer[data-placement="top"]::after {
+  bottom: -5px;
+  border-left: 0;
+  border-top: 0;
+}
+
+@keyframes tooltip-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .form-grid .full,
