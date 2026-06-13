@@ -42,6 +42,39 @@ export class JsonTaskRepository {
     await this.store.write(rows);
   }
 
+  async setEnabledMany(ids, enabled) {
+    return this.updateMany(ids, (task, now) => task.setEnabled(enabled, now));
+  }
+
+  async setPinnedMany(ids, pinned) {
+    return this.updateMany(ids, (task, now) => task.setPinned(pinned, now));
+  }
+
+  async updateMany(ids, updater) {
+    const idSet = new Set((ids || []).filter(Boolean));
+    if (!idSet.size) return [];
+
+    const rows = await this.store.read();
+    const now = new Date();
+    const updatedTasks = [];
+    const nextRows = rows.map((row) => {
+      if (!idSet.has(row.id)) return row;
+      const task = Task.fromRecord(row);
+      updater(task, now);
+      updatedTasks.push(task);
+      return task.toRecord();
+    });
+
+    const updatedIds = new Set(updatedTasks.map((task) => task.id));
+    const missingIds = [...idSet].filter((id) => !updatedIds.has(id));
+    if (missingIds.length) {
+      throw new AppError('TASK_NOT_FOUND', `任务不存在: ${missingIds.join(', ')}`, { ids: missingIds });
+    }
+
+    await this.store.write(nextRows);
+    return updatedTasks;
+  }
+
   async deleteById(id) {
     const rows = await this.store.read();
     const nextRows = rows.filter((item) => item.id !== id);

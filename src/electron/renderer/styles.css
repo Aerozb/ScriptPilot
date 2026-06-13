@@ -1428,6 +1428,8 @@ pre,
 
 .modal {
   width: min(920px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
   border: 0;
   border-radius: calc(var(--radius-base) + 2px);
   padding: 0;
@@ -1441,17 +1443,23 @@ pre,
 
 .modal::backdrop {
   background: rgba(15, 23, 32, 0.48);
-  backdrop-filter: blur(3px);
 }
 
 .modal-card {
   display: grid;
   gap: 14px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: calc(var(--radius-base) + 2px);
   background: var(--surface);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.18);
+}
+
+.task-modal-card {
+  scrollbar-gutter: stable;
 }
 
 .modal-card.narrow {
@@ -1461,6 +1469,7 @@ pre,
 .subscription-log-card {
   grid-template-rows: auto minmax(0, 1fr) auto;
   height: min(760px, calc(100vh - 56px));
+  overflow: hidden;
 }
 
 .subscription-log-card .modal-head small {

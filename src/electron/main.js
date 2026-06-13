@@ -9,7 +9,9 @@ import { createTaskCommand } from '../main/modules/tasks/application/commands/cr
 import { updateTaskCommand } from '../main/modules/tasks/application/commands/update-task.command.js';
 import { deleteTaskCommand } from '../main/modules/tasks/application/commands/delete-task.command.js';
 import { setTaskEnabledCommand } from '../main/modules/tasks/application/commands/set-task-enabled.command.js';
+import { setTasksEnabledCommand } from '../main/modules/tasks/application/commands/set-tasks-enabled.command.js';
 import { setTaskPinnedCommand } from '../main/modules/tasks/application/commands/set-task-pinned.command.js';
+import { setTasksPinnedCommand } from '../main/modules/tasks/application/commands/set-tasks-pinned.command.js';
 import { updateTaskLabelsCommand } from '../main/modules/tasks/application/commands/update-task-labels.command.js';
 import { listTasksQuery } from '../main/modules/tasks/application/queries/list-tasks.query.js';
 import { runTaskNowCommand } from '../main/modules/runs/application/commands/run-task-now.command.js';
@@ -133,7 +135,9 @@ function registerIpc() {
   ipcMain.handle('task:create', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(createTaskCommand(input))));
   ipcMain.handle('task:update', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(updateTaskCommand(input))));
   ipcMain.handle('task:set-enabled', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(setTaskEnabledCommand(input))));
+  ipcMain.handle('task:batch-set-enabled', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(setTasksEnabledCommand(input))));
   ipcMain.handle('task:set-pinned', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(setTaskPinnedCommand(input))));
+  ipcMain.handle('task:batch-set-pinned', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(setTasksPinnedCommand(input))));
   ipcMain.handle('task:update-labels', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(updateTaskLabelsCommand(input))));
   ipcMain.handle('task:delete', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(deleteTaskCommand(input))));
   ipcMain.handle('task:run-now', async (_event, input) => safeInvoke(() => coreApp.commandBus.execute(runTaskNowCommand(input))));

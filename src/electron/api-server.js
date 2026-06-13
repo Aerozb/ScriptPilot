@@ -4,7 +4,9 @@ import { createTaskCommand } from '../main/modules/tasks/application/commands/cr
 import { updateTaskCommand } from '../main/modules/tasks/application/commands/update-task.command.js';
 import { deleteTaskCommand } from '../main/modules/tasks/application/commands/delete-task.command.js';
 import { setTaskEnabledCommand } from '../main/modules/tasks/application/commands/set-task-enabled.command.js';
+import { setTasksEnabledCommand } from '../main/modules/tasks/application/commands/set-tasks-enabled.command.js';
 import { setTaskPinnedCommand } from '../main/modules/tasks/application/commands/set-task-pinned.command.js';
+import { setTasksPinnedCommand } from '../main/modules/tasks/application/commands/set-tasks-pinned.command.js';
 import { updateTaskLabelsCommand } from '../main/modules/tasks/application/commands/update-task-labels.command.js';
 import { listTasksQuery } from '../main/modules/tasks/application/queries/list-tasks.query.js';
 import { runTaskNowCommand } from '../main/modules/runs/application/commands/run-task-now.command.js';
@@ -105,18 +107,20 @@ async function routeRequest(coreApp, request, url) {
 
   if (request.method === 'PATCH' && url.pathname === '/api/tasks/batch/enabled') {
     const body = await readJson(request);
-    return batchExecute(body.ids || [], async (taskId) => coreApp.commandBus.execute(setTaskEnabledCommand({
-      taskId,
+    const commandResult = await coreApp.commandBus.execute(setTasksEnabledCommand({
+      ids: body.ids || [],
       enabled: body.enabled
-    })));
+    }));
+    return commandResult.data;
   }
 
   if (request.method === 'PATCH' && url.pathname === '/api/tasks/batch/pinned') {
     const body = await readJson(request);
-    return batchExecute(body.ids || [], async (taskId) => coreApp.commandBus.execute(setTaskPinnedCommand({
-      taskId,
+    const commandResult = await coreApp.commandBus.execute(setTasksPinnedCommand({
+      ids: body.ids || [],
       pinned: body.pinned
-    })));
+    }));
+    return commandResult.data;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/tasks/batch/labels') {

@@ -51,6 +51,7 @@ const state = {
   currentTaskLogRunId: '',
   currentTaskLogTaskId: '',
   currentSubscriptionLogRunId: '',
+  completedSubscriptionRunRefreshIds: new Set(),
   activePage: 'crontab'
 };
 
@@ -1260,9 +1261,8 @@ async function batchSetTasksEnabled(enabled) {
   setTaskMutating(ids, true);
   renderTasks();
   try {
-    for (const id of ids) {
-      await api.setTaskEnabled(id, enabled);
-    }
+    if (api.setTasksEnabled) await api.setTasksEnabled(ids, enabled);
+    else for (const id of ids) await api.setTaskEnabled(id, enabled);
     setTaskMutating(ids, false);
     renderTasks();
     toast(enabled ? `已启用 ${ids.length} 个任务` : `已禁用 ${ids.length} 个任务`);
@@ -1309,9 +1309,8 @@ async function batchSetTasksPinned(pinned) {
   setTaskMutating(ids, true);
   renderTasks();
   try {
-    for (const id of ids) {
-      await api.setTaskPinned(id, pinned);
-    }
+    if (api.setTasksPinned) await api.setTasksPinned(ids, pinned);
+    else for (const id of ids) await api.setTaskPinned(id, pinned);
     setTaskMutating(ids, false);
     renderTasks();
     toast(pinned ? `已置顶 ${ids.length} 个任务` : `已取消置顶 ${ids.length} 个任务`);
@@ -2353,16 +2352,7 @@ async function renderSubscriptionLog(runId, options = {}) {
     }
     renderRunsIfVisible();
     if (run.status !== 'running') {
-      await Promise.all([
-        refreshSubscriptions(),
-        refreshScripts(),
-        refreshQinglongOverview(),
-        refreshTasksAndRuns()
-      ]);
-      renderMetrics();
-      renderSubscriptions();
-      renderScripts();
-      renderRunsIfVisible();
+      await refreshAfterSubscriptionRun(runId);
     }
     return run;
   } catch (error) {
@@ -2432,16 +2422,7 @@ async function watchSubscriptionRun(runId, subscriptionId, fallbackName) {
       }
     } while (run?.status === 'running');
 
-    await Promise.all([
-      refreshSubscriptions(),
-      refreshScripts(),
-      refreshQinglongOverview(),
-      refreshTasksAndRuns()
-    ]);
-    renderMetrics();
-    renderSubscriptions();
-    renderScripts();
-    renderRunsIfVisible();
+    await refreshAfterSubscriptionRun(runId);
 
     const subscription = state.subscriptions.find((item) => item.id === subscriptionId);
     if (run?.status === 'success') {
@@ -3490,6 +3471,24 @@ function upsertSubscription(subscription) {
     state.subscriptions.unshift(subscription);
   }
   renderSubscriptions();
+}
+
+async function refreshAfterSubscriptionRun(runId) {
+  if (!runId || !state.completedSubscriptionRunRefreshIds.has(runId)) {
+    await Promise.all([
+      refreshSubscriptions(),
+      refreshScripts(),
+      refreshQinglongOverview(),
+      refreshTasksAndRuns()
+    ]);
+    if (runId) state.completedSubscriptionRunRefreshIds.add(runId);
+  }
+
+  renderMetrics();
+  renderTasks();
+  renderSubscriptions();
+  renderScripts();
+  renderRunsIfVisible();
 }
 
 function getSubscriptionName(id) {

@@ -10,10 +10,14 @@ import { DELETE_TASK_COMMAND } from '../modules/tasks/application/commands/delet
 import { DeleteTaskHandler } from '../modules/tasks/application/commands/delete-task.handler.js';
 import { SET_TASK_ENABLED_COMMAND } from '../modules/tasks/application/commands/set-task-enabled.command.js';
 import { SetTaskEnabledHandler } from '../modules/tasks/application/commands/set-task-enabled.handler.js';
+import { SET_TASKS_ENABLED_COMMAND } from '../modules/tasks/application/commands/set-tasks-enabled.command.js';
+import { SetTasksEnabledHandler } from '../modules/tasks/application/commands/set-tasks-enabled.handler.js';
 import { UPDATE_TASK_COMMAND } from '../modules/tasks/application/commands/update-task.command.js';
 import { UpdateTaskHandler } from '../modules/tasks/application/commands/update-task.handler.js';
 import { SET_TASK_PINNED_COMMAND } from '../modules/tasks/application/commands/set-task-pinned.command.js';
 import { SetTaskPinnedHandler } from '../modules/tasks/application/commands/set-task-pinned.handler.js';
+import { SET_TASKS_PINNED_COMMAND } from '../modules/tasks/application/commands/set-tasks-pinned.command.js';
+import { SetTasksPinnedHandler } from '../modules/tasks/application/commands/set-tasks-pinned.handler.js';
 import { UPDATE_TASK_LABELS_COMMAND } from '../modules/tasks/application/commands/update-task-labels.command.js';
 import { UpdateTaskLabelsHandler } from '../modules/tasks/application/commands/update-task-labels.handler.js';
 import { LIST_TASKS_QUERY } from '../modules/tasks/application/queries/list-tasks.query.js';
@@ -65,7 +69,9 @@ export async function createApp(options = {}) {
     taskRepository
   }));
   commandBus.register(SET_TASK_ENABLED_COMMAND, new SetTaskEnabledHandler(taskRepository));
+  commandBus.register(SET_TASKS_ENABLED_COMMAND, new SetTasksEnabledHandler(taskRepository));
   commandBus.register(SET_TASK_PINNED_COMMAND, new SetTaskPinnedHandler(taskRepository));
+  commandBus.register(SET_TASKS_PINNED_COMMAND, new SetTasksPinnedHandler(taskRepository));
   commandBus.register(UPDATE_TASK_LABELS_COMMAND, new UpdateTaskLabelsHandler(taskRepository));
   commandBus.register(DELETE_TASK_COMMAND, new DeleteTaskHandler(taskRepository));
   commandBus.register(RUN_TASK_NOW_COMMAND, new RunTaskNowHandler({
