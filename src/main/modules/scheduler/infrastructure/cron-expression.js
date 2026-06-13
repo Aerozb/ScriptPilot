@@ -53,7 +53,12 @@ function parseCronField(field, [min, max]) {
 
 function fillSegment(values, segment, min, max) {
   if (!segment) return;
-  const [rangePart, stepPart] = segment.split('/');
+  const parts = segment.split('/');
+  if (parts.length > 2 || !parts[0]) {
+    throw new AppError('INVALID_CRON', `Cron 字段格式无效: ${segment}`);
+  }
+
+  const [rangePart, stepPart] = parts;
   const step = stepPart ? Number(stepPart) : 1;
   if (!Number.isInteger(step) || step <= 0) {
     throw new AppError('INVALID_CRON', `Cron 步长无效: ${segment}`);

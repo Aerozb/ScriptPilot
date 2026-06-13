@@ -1,12 +1,22 @@
 # ScriptPilot
 
-ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器。它不需要登录账号，也不需要额外安装 Node，解压后双击启动，就能在本机管理脚本、定时任务、订阅、环境变量、依赖和运行日志。
+ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器。解压后双击启动，不需要登录账号，也不需要自己安装 Node，就能在本机管理脚本、定时任务、订阅、环境变量、依赖和运行日志。
+
+![ScriptPilot 定时任务界面](docs/images/scriptpilot-dashboard.png)
+
+## 适合谁用
+
+- 想在 Windows 上像青龙面板一样管理本地 JS 脚本的人。
+- 想定时运行脚本，但不想折腾 Node、计划任务和命令行的人。
+- 想把 GitHub 仓库或 Raw 脚本拉到本地，并按脚本里的 cron 自动创建任务的人。
+- 想要绿色便携目录，换电脑时直接带走整个文件夹的人。
 
 ## 下载和启动
 
-1. 在 GitHub Release 下载 `ScriptPilot-win-unpacked.zip`。
-2. 解压到你想放置的位置，例如 `D:\Tools\ScriptPilot`。
-3. 双击最外层的 `ScriptPilot.exe` 启动。
+1. 打开 GitHub Releases。
+2. 下载最新版 `ScriptPilot-v版本号-portable.zip`。
+3. 解压到你想放的位置，例如 `D:\Tools\ScriptPilot`。
+4. 双击最外层的 `ScriptPilot.exe` 启动。
 
 解压后的目录应类似：
 
@@ -15,9 +25,32 @@ ScriptPilot.exe
 app/
 ```
 
-不要直接运行 `app/ScriptPilot.exe`。外层 `ScriptPilot.exe` 是便携启动器，会保证程序在正确目录下运行。
+不要直接运行 `app/ScriptPilot.exe`。最外层的 `ScriptPilot.exe` 是便携启动器，会保证程序在正确目录下运行。
 
-## 数据保存位置
+## 快速上手
+
+1. 进入「脚本管理」，新建或保存一个 `.js` 脚本。
+2. 进入「定时任务」，点击「创建任务」。
+3. 「脚本来源」选择「选择已有脚本」，点击「选择脚本」。
+4. 填写任务名称。
+5. 不会写 Cron 时，点击「生成表达式」。
+6. 点击「保存任务」。
+7. 在任务列表点击「运行」或等待定时触发。
+8. 点击「日志」查看实时输出。
+
+Cron 表达式生成器：
+
+![ScriptPilot Cron 表达式生成器](docs/images/scriptpilot-cron-generator.png)
+
+## 详细教程
+
+完整傻瓜式教程见：
+
+[使用说明](docs/usage.md)
+
+里面包含从下载安装到每个功能怎么用、怎么填、填错会提示什么、日志怎么看、订阅怎么自动建任务、Cron 怎么生成等步骤。
+
+## 数据保存在哪里
 
 ScriptPilot 的数据都保存在程序目录内：
 
@@ -43,98 +76,37 @@ tmp/            临时目录
 
 ## 主要功能
 
-### 定时任务
-
-- 支持常规定时、手动运行、开机运行。
-- 新建任务时可以选择已有脚本，也可以填写新脚本内容。
-- 选择已有脚本时支持树型弹窗、多选脚本、批量创建任务。
-- 任务日志用弹窗实时展示，运行后不用等待脚本结束。
-- 任务可以启用、禁用、置顶、运行、停止、查看详情和复制 API。
-
-### 脚本管理
-
-- 所有脚本都保存在 `app/data/scripts`。
-- 支持新建、编辑、保存、删除、运行脚本。
-- 左侧脚本列表按目录树展示，适合管理订阅脚本和自写脚本。
-
-### 订阅管理
-
-订阅可以从 GitHub 仓库、GitHub Raw 或普通 HTTP 脚本拉取文件到本地。
-
-支持的常见格式：
-
-```text
-https://github.com/owner/repo.git
-owner/repo.git
-git@github.com:owner/repo.git
-ql repo https://github.com/owner/repo.git "keyword" "" "" ""
-ql raw https://raw.githubusercontent.com/owner/repo/main/demo.js
-```
-
-如果勾选“拉取后按脚本 cron 自动创建任务”，ScriptPilot 会尝试读取脚本里的 cron 声明，并自动创建对应任务。没有 cron 声明或 cron 无效的脚本会跳过。
-
-### 环境变量
-
-- 用于保存脚本运行需要的变量，例如 `JD_COOKIE`。
-- 同名变量会在运行时用 `&` 拼接，兼容常见青龙脚本习惯。
-- 列表中变量值会遮罩显示，避免误操作时直接暴露完整内容。
-
-### 依赖管理
-
-- 脚本运行前会预检常见 `require/import` 依赖。
-- 缺依赖时自动安装到 `app/data/node_modules`。
-- 如果运行时仍报缺模块，会自动尝试安装并重试。
-
-### 日志
-
-- 任务、手动运行和订阅拉取都会生成日志。
-- 运行中的日志会实时刷新并自动滚动到底部。
-- 系统设置里可以配置日志保留天数，也可以手动立即清理。
-
-## 本机 API
-
-ScriptPilot 默认只监听本机地址：
-
-```text
-http://127.0.0.1:18760
-```
-
-示例：直接运行一段脚本。
-
-```powershell
-$body = @{
-  name = '接口运行'
-  scriptContent = 'console.log(process.argv.slice(2)); console.log(process.env.SCRIPTPILOT_PARAMS)'
-  args = @('参数1')
-  params = @{ 来源 = 'API' }
-  cwd = 'data'
-  timeoutMs = 30000
-} | ConvertTo-Json -Depth 8
-
-Invoke-RestMethod `
-  -Uri 'http://127.0.0.1:18760/api/scripts/run' `
-  -Method Post `
-  -ContentType 'application/json; charset=utf-8' `
-  -Body $body
-```
+- 定时任务：支持常规 Cron、手动运行、开机运行、批量运行、启用禁用、置顶、标签、详情和日志弹窗。
+- Cron 生成器：支持每隔 N 分钟、每隔 N 小时、每天、工作日、每周、每月等常用规则。
+- 脚本管理：用树型列表管理 `data/scripts` 下的脚本，支持新建、编辑、保存、删除和直接运行。
+- 订阅管理：支持 GitHub 仓库、GitHub Raw、普通 HTTP 文件、`ql repo` 和 `ql raw`。
+- 自动创建任务：订阅拉取后可读取脚本里的 cron 和 `new Env('任务名')` 自动创建或更新任务。
+- 环境变量：保存脚本运行所需变量，同名变量运行时会用 `&` 拼接。
+- 依赖管理：缺依赖时可自动安装到 `app/data/node_modules`，也支持手动安装和卸载。
+- 日志管理：任务、手动运行和订阅拉取都会生成日志，运行中实时刷新。
+- 本机 API：默认只监听 `http://127.0.0.1:18760`，方便本机脚本或工具调用。
 
 ## 常见问题
 
-### 启动器图标还是空白
+### 启动器图标还是空白？
 
-Windows 可能缓存旧图标。可以尝试重新解压、重建快捷方式，或重启资源管理器。
+Windows 可能缓存旧图标。可以重新解压、重建快捷方式，或者重启资源管理器。
 
-### 程序变慢
+### 新建任务不会写 Cron 怎么办？
 
-脚本运行、依赖安装、订阅拉取都会占用磁盘和网络。电脑很卡时，建议先关闭正在运行的重任务，再操作批量运行或批量订阅。
+点击任务弹窗里的「生成表达式」，选择“每隔 N 分钟”“每天固定时间”“每周固定时间”等方式，确认预览后点「使用这个表达式」。
 
-### 能不能放到移动硬盘
+### 程序会不会写入 AppData？
 
-可以。只要保持 `ScriptPilot.exe` 和 `app/` 在同一目录即可。
+正常使用不会。Electron 会话、缓存、日志、脚本依赖都会重定向到 `app/data` 内。
 
-### 会不会写入 AppData
+### 发布包会不会带本地数据？
 
-正常使用不会。Electron 会话、缓存、日志、脚本依赖都重定向到 `app/data` 内。
+不会。发布包会排除 `app/data`，不会上传本机任务、变量、CK、日志和缓存。
+
+### 能不能放到移动硬盘？
+
+可以。只要保持 `ScriptPilot.exe` 和 `app/` 在同一个目录即可。
 
 ## 注意
 

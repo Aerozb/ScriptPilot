@@ -683,6 +683,62 @@ pre,
   line-height: 1.5;
 }
 
+.cron-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.cron-field small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cron-field small[data-tone="error"],
+.cron-preview small[data-tone="error"] {
+  color: var(--red);
+}
+
+.cron-generator {
+  display: grid;
+  gap: 14px;
+}
+
+.cron-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cron-preview {
+  display: grid;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.cron-preview span,
+.cron-preview small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cron-preview code {
+  width: fit-content;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 8px;
+  color: var(--accent-strong);
+  background: var(--surface);
+  font-weight: 800;
+}
+
 .script-picker-list {
   display: block;
   max-height: min(520px, calc(100vh - 280px));
@@ -1712,7 +1768,8 @@ pre,
     width: 100%;
   }
 
-  .script-path-picker {
+  .script-path-picker,
+  .cron-field {
     grid-template-columns: 1fr;
   }
 

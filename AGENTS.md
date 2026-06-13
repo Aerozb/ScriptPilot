@@ -39,7 +39,7 @@
 - UI 改动要同步到 `release/win-unpacked/app/resources/app/` 对应源码文件。
 - 当前 EXE 正在运行时，不要强杀进程；如需改内层 EXE 资源，提示用户先关闭程序。
 - 推送 GitHub 或发 Release 前，先确认产物不包含 `app/data/`。
-- GitHub Release 页面说明只写中文更新说明和修复内容；不要写“发布产物”“校验信息”、SHA256 或 `.sha256` 文件名。
+- GitHub Release 页面说明只写中文更新说明和修复内容；不要写“发布产物”“校验信息”、SHA256 或 `.sha256` 文件名；不要生成或上传 `.sha256` 附件。
 
 ## 验证基线
 

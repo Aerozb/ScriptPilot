@@ -1,21 +1,25 @@
 import { _electron as electron } from 'playwright';
-import { rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { cp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 
 const root = process.cwd();
-const releaseRoot = path.join(root, 'release', 'win-unpacked');
+const sourceReleaseRoot = path.join(root, 'release', 'win-unpacked');
+const releaseRoot = path.join(os.tmpdir(), `scriptpilot-human-acceptance-${Date.now()}`);
 const launcherPath = path.join(releaseRoot, 'ScriptPilot.exe');
 const appRoot = path.join(releaseRoot, 'app');
 const exePath = path.join(appRoot, 'ScriptPilot.exe');
 const dataRoot = path.join(appRoot, 'data');
-const reportPath = path.join(dataRoot, 'state', 'human-acceptance-report.json');
+const reportPath = path.join(root, 'release', 'artifacts', 'human-acceptance-report.json');
 const outsideRoot = path.join(path.dirname(releaseRoot), 'outside-portable-root-test');
+const apiPort = '18778';
+const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
 const checks = [];
 
-await assertPortableRootLayout();
-await rm(dataRoot, { recursive: true, force: true });
+await assertPortableRootLayout(sourceReleaseRoot);
+await prepareAcceptancePortableRoot();
 await mkdir(path.dirname(reportPath), { recursive: true });
 
 let app;
@@ -27,7 +31,11 @@ try {
   app = await electron.launch({
     executablePath: exePath,
     cwd: releaseRoot,
-    args: ['--acceptance-test']
+    args: ['--acceptance-test'],
+    env: {
+      ...process.env,
+      SCRIPTPILOT_API_PORT: apiPort
+    }
   });
   console.log('等待主窗口...');
   const page = await waitForMainWindow(app);
@@ -48,8 +56,11 @@ try {
   await check('系统设置显示绿色目录、API 和中文菜单', async () => {
     await page.locator('[data-page="setting"]').click();
     await expectText(page, '#pageTitle', '系统设置');
-    await expectText(page, '#apiUrl', 'http://127.0.0.1:18760');
-    await expectText(page, '#dataRoot', 'release');
+    await expectText(page, '#apiUrl', apiBaseUrl);
+    await page.waitForFunction((expected) => {
+      const actual = document.querySelector('#dataRoot')?.textContent?.replaceAll('\\', '/');
+      return actual === expected.replaceAll('\\', '/');
+    }, dataRoot);
     const dataReadme = await readFile(path.join(dataRoot, 'README.md'), 'utf8');
     assert(dataReadme.includes('ScriptPilot data 目录说明'), 'data/README.md 缺少标题说明');
     assert(dataReadme.includes('configs/') && dataReadme.includes('scripts/') && dataReadme.includes('repo/') && dataReadme.includes('raw/') && dataReadme.includes('state/'), 'data/README.md 缺少关键目录用途');
@@ -239,7 +250,7 @@ try {
     await expandScriptDirectory(page, subscription.localPath);
     await expectText(page, '#scriptList', 'fixture.js');
 
-    const subscriptionRun = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const subscriptionRun = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '订阅脚本验收',
       scriptPath: subscriptionScriptPath,
       args: ['from-subscription'],
@@ -280,38 +291,103 @@ try {
     await page.locator('#subscriptionLogModal').waitFor({ state: 'hidden' });
   });
 
-  await check('创建定时任务后可批量运行并查看日志', async () => {
+  await check('Cron 表达式生成器可按人类操作生成并应用', async () => {
     await page.locator('[data-page="crontab"]').click();
     await page.locator('#newTaskButton').click();
-    const name = `GUI任务-${Date.now()}`;
-    await page.locator('#taskNameInput').fill(name);
-    await page.locator('#taskScriptPathInput').fill('');
-    await page.locator('#taskScriptContentInput').fill([
-      'const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");',
-      'console.log("GUI任务运行成功");',
-      'console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));'
-    ].join('\n'));
-    await page.locator('#taskCronInput').fill('*/5 * * * *');
-    await page.locator('#taskArgsInput').fill('任务参数');
-    await page.locator('#taskParamsInput').fill(JSON.stringify({ 来源: '任务表单' }, null, 2));
-    await page.locator('#taskForm button[type="submit"]').click();
-    await expectText(page, '#taskTable', name);
-    await page.locator('#taskTable tbody tr').filter({ hasText: name }).locator('[data-task-check]').check();
-    await page.locator('#batchRunTasksButton').click();
-    await page.locator('#confirmModal').waitFor({ state: 'visible' });
-    await page.locator('#confirmOkButton').click();
-    await expectText(page, '#pageTitle', '日志管理');
-    await expectText(page, '#logViewer', 'GUI任务运行成功');
+    await page.locator('#openCronGeneratorButton').click();
+    await page.locator('#cronGeneratorModal').waitFor({ state: 'visible' });
+    await page.locator('#cronModeInput').selectOption('daily');
+    await page.locator('#cronHourInput').fill('6');
+    await page.locator('#cronMinuteInput').fill('30');
+    await expectText(page, '#cronPreviewExpression', '30 6 * * *');
+    await expectText(page, '#cronPreviewDescription', '每天 06:30 运行');
+    await page.locator('#applyCronExpressionButton').click();
+    await page.locator('#cronGeneratorModal').waitFor({ state: 'hidden' });
+    assert(await page.locator('#taskCronInput').inputValue() === '30 6 * * *', 'Cron 生成器没有写回任务表单');
+    await expectText(page, '#taskCronHint', '每天 06:30 运行');
+    await page.locator('#taskModal [data-close-modal]').first().click();
+    await page.locator('#taskModal').waitFor({ state: 'hidden' });
+  });
+
+  await check('新建任务表单会拦截错误输入并给出提示', async () => {
+    await page.locator('[data-page="crontab"]').click();
+    await page.locator('#newTaskButton').click();
+    try {
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', '请选择至少一个已有脚本');
+      await chooseTaskScriptSource(page, 'inline');
+      await setInputValue(page, '#taskNameInput', '');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', '任务名称 不能为空');
+
+      await setInputValue(page, '#taskNameInput', '校验任务');
+      await setInputValue(page, '#taskCronInput', '/5 * * * *');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', 'Cron 表达式');
+
+      await setInputValue(page, '#taskCronInput', '*/5 * * * *');
+      await setInputValue(page, '#taskExtraSchedulesInput', '0 99 * * *');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', '额外定时规则');
+
+      await setInputValue(page, '#taskExtraSchedulesInput', '');
+      await setInputValue(page, '#taskTimeoutInput', '-1');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', '超时毫秒');
+
+      await setInputValue(page, '#taskTimeoutInput', '30000');
+      await setInputValue(page, '#taskParamsInput', '{ bad json');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', 'JSON');
+
+      await setInputValue(page, '#taskParamsInput', '{}');
+      await setInputValue(page, '#taskScriptPathInput', 'C:/outside.js');
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#toast', '脚本保存路径');
+    } finally {
+      await closeDialogIfOpen(page, '#taskModal');
+    }
+  });
+
+  await check('创建定时任务后可批量运行并查看日志', async () => {
+    try {
+      await page.locator('[data-page="crontab"]').click();
+      await page.locator('#newTaskButton').click();
+      await chooseTaskScriptSource(page, 'inline');
+      const name = `GUI任务-${Date.now()}`;
+      await page.locator('#taskNameInput').fill(name);
+      await page.locator('#taskScriptPathInput').fill('');
+      await page.locator('#taskScriptContentInput').fill([
+        'const params = JSON.parse(process.env.SCRIPTPILOT_PARAMS || "{}");',
+        'console.log("GUI任务运行成功");',
+        'console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: process.env.SCRIPTPILOT_TRIGGER }));'
+      ].join('\n'));
+      await page.locator('#taskCronInput').fill('*/5 * * * *');
+      await page.locator('#taskArgsInput').fill('任务参数');
+      await page.locator('#taskParamsInput').fill(JSON.stringify({ 来源: '任务表单' }, null, 2));
+      await page.locator('#taskForm button[type="submit"]').click();
+      await expectText(page, '#taskTable', name);
+      await page.locator('#taskTable tbody tr').filter({ hasText: name }).locator('[data-task-check]').check();
+      await page.locator('#batchRunTasksButton').click();
+      await page.locator('#confirmModal').waitFor({ state: 'visible' });
+      await page.locator('#confirmOkButton').click();
+      await page.locator('#taskLogModal').waitFor({ state: 'visible' });
+      await expectText(page, '#taskLogViewer', 'GUI任务运行成功');
+    } finally {
+      await closeDialogIfOpen(page, '#taskLogModal');
+      await closeDialogIfOpen(page, '#taskModal');
+    }
   });
 
   await check('定时任务页复刻青龙式更多菜单、详情、视图和删除', async () => {
     await page.locator('[data-page="crontab"]').click();
     await page.locator('#newTaskButton').click();
+    await chooseTaskScriptSource(page, 'inline');
     const name = `待删除任务-${Date.now()}`;
     await page.locator('#taskNameInput').fill(name);
     await page.locator('#taskScriptPathInput').fill('');
     await page.locator('#taskScriptContentInput').fill('console.log("这个任务会被删除");');
-    await page.locator('#taskCronInput').fill('');
+    await page.locator('#taskCronInput').fill('*/5 * * * *');
     await page.locator('#taskLabelsInput').fill('验收\n青龙');
     await page.locator('#taskForm button[type="submit"]').click();
     await expectText(page, '#taskTable', name);
@@ -321,18 +397,12 @@ try {
     await page.locator('#toast').waitFor({ state: 'visible' });
     await openTaskMoreMenu(page, row);
     await page.locator('.floating-menu [data-menu-action="toggle"]').click();
-    await page.locator('#confirmModal').waitFor({ state: 'visible' });
-    await page.locator('#confirmOkButton').click();
     await expectText(page, '#taskTable', '已禁用');
     await openTaskMoreMenu(page, row);
     await page.locator('.floating-menu [data-menu-action="toggle"]').click();
-    await page.locator('#confirmModal').waitFor({ state: 'visible' });
-    await page.locator('#confirmOkButton').click();
     await expectText(page, '#taskTable', '空闲中');
     await openTaskMoreMenu(page, row);
     await page.locator('.floating-menu [data-menu-action="pin"]').click();
-    await page.locator('#confirmModal').waitFor({ state: 'visible' });
-    await page.locator('#confirmOkButton').click();
     await expectText(page, '#taskTable', '置顶');
     await row.locator('[data-detail-task]').click();
     await page.locator('#taskDetailModal').waitFor({ state: 'visible' });
@@ -364,7 +434,7 @@ try {
   });
 
   await check('本机 API 可携带参数运行脚本', async () => {
-    const response = await fetch('http://127.0.0.1:18760/api/scripts/run', {
+    const response = await fetch(`${apiBaseUrl}/api/scripts/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({
@@ -383,7 +453,7 @@ try {
   });
 
   await check('脚本运行环境强制指向安装目录 data', async () => {
-    const body = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const body = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '绿色环境验收',
       scriptContent: [
         'const env = process.env;',
@@ -432,7 +502,7 @@ try {
     await mkdir(outsideRoot, { recursive: true });
     const outsideScriptPath = path.join(outsideRoot, 'outside-scriptpilot-test.js');
     await writeFile(outsideScriptPath, 'console.log("outside should not run");', 'utf8');
-    const scriptBody = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const scriptBody = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '外部路径验收',
       scriptPath: outsideScriptPath,
       timeoutMs: 30000
@@ -440,7 +510,7 @@ try {
     assert(scriptBody.ok === false, '外部脚本路径不应允许运行');
     assert(scriptBody.error?.code === 'PATH_OUTSIDE_PORTABLE_ROOT', `外部脚本路径错误码异常: ${scriptBody.error?.code}`);
 
-    const cwdBody = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const cwdBody = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '外部工作目录验收',
       scriptContent: 'console.log("cwd should not run");',
       cwd: outsideRoot,
@@ -449,7 +519,7 @@ try {
     assert(cwdBody.ok === false, '外部工作目录不应允许运行');
     assert(cwdBody.error?.code === 'PATH_OUTSIDE_PORTABLE_ROOT', `外部工作目录错误码异常: ${cwdBody.error?.code}`);
 
-    const taskResponse = await fetch('http://127.0.0.1:18760/api/tasks', {
+    const taskResponse = await fetch(`${apiBaseUrl}/api/tasks`, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({
@@ -464,19 +534,19 @@ try {
 
   await check('青龙式模块 API 可读写环境变量', async () => {
     const name = `API_ENV_${Date.now()}`;
-    const saveResponse = await fetch('http://127.0.0.1:18760/api/ql/envs', {
+    const saveResponse = await fetch(`${apiBaseUrl}/api/ql/envs`, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ name, value: 'api-value', remarks: 'api 创建' })
     });
     const saveBody = await saveResponse.json();
     assert(saveBody.ok, '保存环境变量 API 失败');
-    const listResponse = await fetch('http://127.0.0.1:18760/api/ql/envs');
+    const listResponse = await fetch(`${apiBaseUrl}/api/ql/envs`);
     const listBody = await listResponse.json();
     assert(listBody.ok, '读取环境变量 API 失败');
     assert(listBody.data.items.some((item) => item.name === name), '青龙式环境变量 API 未返回新变量');
 
-    const runBody = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const runBody = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '环境变量注入验收',
       scriptContent: `console.log(process.env.${name});`,
       cwd: 'data',
@@ -508,8 +578,8 @@ try {
       cwd: 'data',
       timeoutMs: 120000
     };
-    const first = await postJson('http://127.0.0.1:18760/api/scripts/run', payload);
-    const second = await postJson('http://127.0.0.1:18760/api/scripts/run', payload);
+    const first = await postJson(`${apiBaseUrl}/api/scripts/run`, payload);
+    const second = await postJson(`${apiBaseUrl}/api/scripts/run`, payload);
     assert(first.data.run.status === 'success', '第一次依赖脚本未成功');
     assert(first.data.run.dependencyCheck.status === '已自动安装', `第一次依赖状态异常: ${first.data.run.dependencyCheck.status}`);
     assert(second.data.run.status === 'success', '第二次依赖脚本未成功');
@@ -524,7 +594,7 @@ try {
     await writeFile(helperPath, 'module.exports = require("is-number")(42);', 'utf8');
     await writeFile(entryPath, 'console.log(require("./helper") ? "helper-ok" : "helper-fail");', 'utf8');
 
-    const body = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const body = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '本地依赖递归验收',
       scriptPath: path.relative(appRoot, entryPath).replaceAll(path.sep, '/'),
       cwd: 'data',
@@ -538,7 +608,7 @@ try {
   });
 
   await check('运行时才暴露的缺失依赖会自动补装并重试', async () => {
-    const body = await postJson('http://127.0.0.1:18760/api/scripts/run', {
+    const body = await postJson(`${apiBaseUrl}/api/scripts/run`, {
       name: '运行时依赖重试验收',
       scriptContent: [
         'const packageName = "is-odd";',
@@ -556,7 +626,7 @@ try {
   });
 
   await check('接口错误返回中文 JSON', async () => {
-    const response = await fetch('http://127.0.0.1:18760/api/scripts/run', {
+    const response = await fetch(`${apiBaseUrl}/api/scripts/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: '{ bad json'
@@ -616,7 +686,7 @@ try {
       }
     ], null, 2)}\n`, 'utf8');
 
-    await postJson('http://127.0.0.1:18760/api/settings', {
+    await postJson(`${apiBaseUrl}/api/settings`, {
       logCleanup: {
         enabled: true,
         retentionDays: 1,
@@ -624,7 +694,7 @@ try {
         lastCleanedAt: ''
       }
     });
-    const cleanupBody = await postJson('http://127.0.0.1:18760/api/logs/cleanup', {});
+    const cleanupBody = await postJson(`${apiBaseUrl}/api/logs/cleanup`, {});
     assert(cleanupBody.ok, '日志清理 API 返回 ok=false');
     assert(cleanupBody.data.deletedRuns >= 1, '日志清理没有删除过期运行记录');
     assert(cleanupBody.data.deletedLogFiles >= 2, '日志清理没有删除过期日志文件');
@@ -635,7 +705,7 @@ try {
     assert(!(await fileExists(oldStdoutPath)) && !(await fileExists(oldStderrPath)), '过期日志文件仍然存在');
     assert(await fileExists(recentStdoutPath) && await fileExists(recentStderrPath), '新日志文件被误删');
 
-    await postJson('http://127.0.0.1:18760/api/settings', {
+    await postJson(`${apiBaseUrl}/api/settings`, {
       logCleanup: {
         enabled: true,
         retentionDays: 30,
@@ -662,6 +732,7 @@ try {
     checks,
     writtenAt: new Date().toISOString()
   }, null, 2)}\n`, 'utf8');
+  await rm(releaseRoot, { recursive: true, force: true });
 }
 
 if (!checks.every((item) => item.ok)) {
@@ -808,6 +879,37 @@ async function setInputValue(page, selector, value) {
   }, value);
 }
 
+async function chooseTaskScriptSource(page, value) {
+  await page.locator('#taskScriptSourceInput').evaluate((node, nextValue) => {
+    node.value = nextValue;
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+  await page.waitForFunction((expectedValue) => {
+    const source = document.querySelector('#taskScriptSourceInput');
+    const contentField = document.querySelector('#taskScriptContentField');
+    const pathInput = document.querySelector('#taskScriptPathInput');
+    if (source?.value !== expectedValue) return false;
+    if (expectedValue === 'inline') return contentField && !contentField.hidden && pathInput && !pathInput.readOnly;
+    return contentField && contentField.hidden && pathInput && pathInput.readOnly;
+  }, value);
+}
+
+async function closeDialogIfOpen(page, selector) {
+  const dialog = page.locator(selector);
+  if (!await dialog.count()) return;
+  const isOpen = await dialog.evaluate((node) => Boolean(node.open)).catch(() => false);
+  if (!isOpen) return;
+  const closeButton = dialog.locator('[data-close-modal]').first();
+  if (await closeButton.count()) {
+    await closeButton.click({ force: true }).catch(async () => {
+      await page.keyboard.press('Escape').catch(() => {});
+    });
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+}
+
 async function attachDialogHandler(page) {
   if (dialogHandlerAttached) return;
   dialogHandlerAttached = true;
@@ -934,9 +1036,21 @@ async function writeInterimReport() {
   }, null, 2)}\n`, 'utf8');
 }
 
-async function assertPortableRootLayout() {
-  const entries = (await readdir(releaseRoot)).sort();
+async function prepareAcceptancePortableRoot() {
+  await rm(releaseRoot, { recursive: true, force: true });
+  await cp(sourceReleaseRoot, releaseRoot, {
+    recursive: true,
+    filter: (source) => {
+      const normalized = source.split(path.sep).join('/');
+      return !normalized.includes('/app/data') && !normalized.endsWith('/app/data');
+    }
+  });
+  await assertPortableRootLayout(releaseRoot);
+}
+
+async function assertPortableRootLayout(targetRoot) {
+  const entries = (await readdir(targetRoot)).sort();
   assert(entries.length === 2 && entries[0] === 'ScriptPilot.exe' && entries[1] === 'app', `绿色版主目录必须只包含 ScriptPilot.exe 和 app，当前为: ${entries.join(', ')}`);
-  await readFile(launcherPath);
-  await readFile(exePath);
+  await readFile(path.join(targetRoot, 'ScriptPilot.exe'));
+  await readFile(path.join(targetRoot, 'app', 'ScriptPilot.exe'));
 }

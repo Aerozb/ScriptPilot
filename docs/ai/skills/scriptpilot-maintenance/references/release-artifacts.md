@@ -71,7 +71,8 @@ app/data/
 - 发布前必须同步修改 `package.json` 和 `package-lock.json` 的版本号。
 - 发布压缩包命名必须带当前版本号，例如 `ScriptPilot-v0.1.1-portable.zip`。
 - Release 页面说明必须面向普通用户，只写中文更新说明和修复内容。
-- Release 页面说明不要写“发布产物”“校验信息”、SHA256 或 `.sha256` 文件名；这些只作为内部验证和附件存在。
+- Release 页面说明不要写“发布产物”“校验信息”、SHA256 或 `.sha256` 文件名。
+- GitHub Release 只上传便携 zip；不要生成或上传 `.sha256` 附件。需要校验时只在本地验证 zip 内容和版本号。
 - 源码通过 Git commit/push 上传。
 - 便携产物通过 GitHub Release 附件上传，不提交进源码仓库。
 - 上传前先检查压缩包内容，确认没有 `app/data/`。

@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { commandOk } from '../../../../shared/application/command-result.js';
-import { assertValidCronExpression } from '../../../scheduler/infrastructure/cron-expression.js';
 import { assertInsidePath, resolvePortablePath, toPortablePath } from '../../../../bootstrap/portable-paths.js';
 import { Task } from '../../domain/task.aggregate.js';
+import { assertValidTaskSchedules } from '../task-schedule-validation.js';
 
 export class CreateTaskHandler {
   constructor(deps) {
@@ -19,9 +19,7 @@ export class CreateTaskHandler {
 
     normalizeTaskPaths(this.paths, input);
 
-    if (input.cronExpression && !String(input.cronExpression).startsWith('@')) {
-      assertValidCronExpression(input.cronExpression);
-    }
+    assertValidTaskSchedules(input);
 
     const task = Task.create(input);
     await this.taskRepository.save(task);

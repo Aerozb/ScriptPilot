@@ -69,6 +69,7 @@ let taskLogRefreshTimer;
 let subscriptionLogRefreshTimer;
 let taskScriptPickerRenderFrame;
 let envRenderFrame;
+let cronGeneratorExpression = '*/5 * * * *';
 
 document.addEventListener('DOMContentLoaded', () => {
   bindElements();
@@ -166,6 +167,13 @@ function bindEvents() {
   });
   els.confirmTaskScriptPickerButton.addEventListener('click', () => confirmTaskScriptPicker());
   els.taskScheduleTypeInput.addEventListener('change', () => syncScheduleTypeFields());
+  els.taskCronInput.addEventListener('input', () => updateTaskCronHint());
+  els.openCronGeneratorButton.addEventListener('click', () => openCronGenerator());
+  els.cronModeInput.addEventListener('change', () => renderCronGenerator());
+  els.cronGeneratorModal.addEventListener('input', () => renderCronGenerator());
+  els.cronGeneratorModal.addEventListener('change', () => renderCronGenerator());
+  els.cronGeneratorModal.addEventListener('click', handleCronGeneratorClick);
+  els.applyCronExpressionButton.addEventListener('click', () => applyCronExpression());
   els.labelForm.addEventListener('submit', handleLabelSubmit);
   els.removeLabelsButton.addEventListener('click', () => updateSelectedLabels('remove'));
   els.viewForm.addEventListener('submit', handleViewSubmit);
@@ -818,27 +826,39 @@ async function handleTaskSubmit(event) {
 function readTaskForm() {
   const scheduleType = els.taskScheduleTypeInput.value;
   const source = els.taskScriptSourceInput.value;
+  const name = readRequiredValue('taskNameInput', '任务名称');
   const scriptPaths = source === 'existing' ? normalizeSelectedTaskScriptPaths() : [];
   if (source === 'existing' && !scriptPaths.length) {
     throw new Error('请选择至少一个已有脚本，或切换为“填写新脚本内容”');
   }
+  scriptPaths.forEach((scriptPath) => validatePortablePathText(scriptPath, '脚本路径', { mustBeScript: true }));
   const scriptContent = source === 'inline' ? readValue('taskScriptContentInput') : '';
   if (source === 'inline' && !scriptContent) {
     throw new Error('请填写脚本内容，或切换为“选择已有脚本”');
   }
+  const inlineScriptPath = source === 'inline' ? readValue('taskScriptPathInput') : '';
+  if (inlineScriptPath) validatePortablePathText(inlineScriptPath, '脚本保存路径', { mustBeScript: true });
+
+  const cronExpression = readTaskCronExpression(scheduleType);
+  const extraSchedules = scheduleType === 'normal' ? readLines('taskExtraSchedulesInput') : [];
+  extraSchedules.forEach((schedule) => assertValidCronExpression(schedule, '额外定时规则'));
+  const cwd = readValue('taskCwdInput') || 'data';
+  validatePortablePathText(cwd, '工作目录');
+  const dependencies = readLines('taskDependenciesInput');
+  dependencies.forEach((name) => assertValidDependencyName(name));
 
   return {
     taskId: els.taskIdInput.value || undefined,
-    name: readValue('taskNameInput'),
-    scriptPath: source === 'inline' ? readValue('taskScriptPathInput') || undefined : scriptPaths[0],
+    name,
+    scriptPath: source === 'inline' ? inlineScriptPath || undefined : scriptPaths[0],
     scriptPaths,
     scriptContent: scriptContent || undefined,
-    cronExpression: scheduleType === 'boot' ? '@boot' : scheduleType === 'once' ? '@once' : readValue('taskCronInput') || undefined,
-    cwd: readValue('taskCwdInput') || 'data',
+    cronExpression,
+    cwd,
     args: readLines('taskArgsInput'),
     params: readJsonObject('taskParamsInput', '结构化参数 JSON'),
-    dependencies: readLines('taskDependenciesInput'),
-    extraSchedules: readLines('taskExtraSchedulesInput'),
+    dependencies,
+    extraSchedules,
     labels: readLines('taskLabelsInput'),
     allowMultipleInstances: els.taskInstanceModeInput.value === 'multiple',
     logName: readValue('taskLogNameInput') || undefined,
@@ -846,8 +866,225 @@ function readTaskForm() {
     afterScript: readValue('taskAfterInput') || undefined,
     remark: readValue('taskRemarkInput') || undefined,
     enabled: els.taskEnabledInput.checked,
-    timeoutMs: readInteger('taskTimeoutInput', 30000)
+    timeoutMs: readNonNegativeInteger('taskTimeoutInput', '超时毫秒', 30000)
   };
+}
+
+function readTaskCronExpression(scheduleType) {
+  if (scheduleType === 'boot') return '@boot';
+  if (scheduleType === 'once') return '@once';
+  const cron = readRequiredValue('taskCronInput', 'Cron 表达式');
+  assertValidCronExpression(cron, 'Cron 表达式');
+  return cron;
+}
+
+function openCronGenerator() {
+  cronGeneratorExpression = readValue('taskCronInput') || '*/5 * * * *';
+  renderCronGenerator();
+  els.cronGeneratorModal.showModal();
+  els.cronModeInput.focus();
+}
+
+function handleCronGeneratorClick(event) {
+  const preset = event.target.closest('[data-cron-preset]');
+  if (!preset) return;
+  cronGeneratorExpression = preset.dataset.cronPreset;
+  renderCronPreview(cronGeneratorExpression, describeCronExpression(cronGeneratorExpression), '');
+}
+
+function renderCronGenerator() {
+  const mode = els.cronModeInput.value;
+  document.querySelectorAll('[data-cron-field]').forEach((field) => {
+    field.hidden = !field.dataset.cronField.split(/\s+/).includes(mode);
+  });
+
+  try {
+    const result = buildCronFromGenerator();
+    cronGeneratorExpression = result.expression;
+    renderCronPreview(result.expression, result.description, '');
+  } catch (error) {
+    renderCronPreview(cronGeneratorExpression, describeCronExpression(cronGeneratorExpression), error.message);
+  }
+}
+
+function buildCronFromGenerator() {
+  const mode = els.cronModeInput.value;
+  if (mode === 'every-minutes') {
+    const minutes = readBoundedFormInteger('cronEveryMinutesInput', 1, 59, '间隔分钟');
+    return {
+      expression: `*/${minutes} * * * *`,
+      description: `每隔 ${minutes} 分钟运行一次`
+    };
+  }
+
+  if (mode === 'every-hours') {
+    const hours = readBoundedFormInteger('cronEveryHoursInput', 1, 23, '间隔小时');
+    const minute = readBoundedFormInteger('cronHourlyMinuteInput', 0, 59, '第几分钟运行');
+    return {
+      expression: `${minute} */${hours} * * *`,
+      description: `每隔 ${hours} 小时，在第 ${padTime(minute)} 分钟运行一次`
+    };
+  }
+
+  const hour = readBoundedFormInteger('cronHourInput', 0, 23, '小时');
+  const minute = readBoundedFormInteger('cronMinuteInput', 0, 59, '分钟');
+  if (mode === 'daily') {
+    return {
+      expression: `${minute} ${hour} * * *`,
+      description: `每天 ${formatTime(hour, minute)} 运行`
+    };
+  }
+  if (mode === 'workdays') {
+    return {
+      expression: `${minute} ${hour} * * 1-5`,
+      description: `每个工作日 ${formatTime(hour, minute)} 运行`
+    };
+  }
+  if (mode === 'weekly') {
+    const weekday = els.cronWeekdayInput.value;
+    return {
+      expression: `${minute} ${hour} * * ${weekday}`,
+      description: `每${formatWeekday(weekday)} ${formatTime(hour, minute)} 运行`
+    };
+  }
+  if (mode === 'monthly') {
+    const day = readBoundedFormInteger('cronMonthDayInput', 1, 31, '日期');
+    return {
+      expression: `${minute} ${hour} ${day} * *`,
+      description: `每月 ${day} 日 ${formatTime(hour, minute)} 运行`
+    };
+  }
+
+  throw new Error('请选择生成方式');
+}
+
+function renderCronPreview(expression, description, error) {
+  els.cronPreviewExpression.textContent = expression || '-';
+  els.cronPreviewDescription.textContent = description || '暂未生成表达式';
+  els.cronPreviewError.textContent = error || '';
+  els.cronPreviewError.dataset.tone = error ? 'error' : '';
+  els.applyCronExpressionButton.disabled = Boolean(error);
+}
+
+function applyCronExpression() {
+  assertValidCronExpression(cronGeneratorExpression, 'Cron 表达式');
+  els.taskCronInput.value = cronGeneratorExpression;
+  updateTaskCronHint();
+  els.cronGeneratorModal.close();
+}
+
+function updateTaskCronHint() {
+  if (els.taskScheduleTypeInput.value !== 'normal') {
+    els.taskCronHint.textContent = '手动运行和开机运行不需要填写 Cron 表达式。';
+    els.taskCronHint.dataset.tone = '';
+    return;
+  }
+
+  const cron = readValue('taskCronInput');
+  try {
+    assertValidCronExpression(cron, 'Cron 表达式');
+    els.taskCronHint.textContent = describeCronExpression(cron);
+    els.taskCronHint.dataset.tone = '';
+  } catch (error) {
+    els.taskCronHint.textContent = error.message;
+    els.taskCronHint.dataset.tone = 'error';
+  }
+}
+
+function assertValidCronExpression(expression, label = 'Cron 表达式') {
+  const parts = String(expression || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 5) throw new Error(`${label} 必须是 5 段：分 时 日 月 周，例如 */5 * * * *`);
+
+  const ranges = [
+    ['分', 0, 59],
+    ['时', 0, 23],
+    ['日', 1, 31],
+    ['月', 1, 12],
+    ['周', 0, 6]
+  ];
+  parts.forEach((part, index) => assertValidCronField(part, ranges[index], label));
+}
+
+function assertValidCronField(field, [name, min, max], label) {
+  for (const segment of field.split(',')) {
+    if (!segment.trim()) throw new Error(`${label} 的${name}字段有空片段`);
+    const [rangePart, stepPart] = segment.split('/');
+    if (segment.split('/').length > 2) throw new Error(`${label} 的${name}字段格式错误：${segment}`);
+    if (!rangePart) throw new Error(`${label} 的${name}字段格式错误：${segment}`);
+    if (stepPart !== undefined) {
+      const step = Number(stepPart);
+      if (!Number.isInteger(step) || step <= 0) throw new Error(`${label} 的${name}字段步长必须大于 0：${segment}`);
+    }
+    if (rangePart === '*') continue;
+
+    if (rangePart.includes('-')) {
+      const [start, end] = rangePart.split('-').map(Number);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < min || end > max || start > end) {
+        throw new Error(`${label} 的${name}字段范围应为 ${min}-${max}：${segment}`);
+      }
+      continue;
+    }
+
+    const value = Number(rangePart);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${label} 的${name}字段应为 ${min}-${max}：${segment}`);
+    }
+  }
+}
+
+function describeCronExpression(expression) {
+  const cron = String(expression || '').trim();
+  const parts = cron.split(/\s+/);
+  if (parts.length !== 5) return 'Cron 表达式需要 5 段：分 时 日 月 周';
+
+  const [minute, hour, day, month, weekday] = parts;
+  const everyMinute = minute.match(/^\*\/(\d+)$/);
+  if (everyMinute && hour === '*' && day === '*' && month === '*' && weekday === '*') {
+    return `每隔 ${everyMinute[1]} 分钟运行一次`;
+  }
+
+  const everyHour = hour.match(/^\*\/(\d+)$/);
+  if (/^\d+$/.test(minute) && everyHour && day === '*' && month === '*' && weekday === '*') {
+    return `每隔 ${everyHour[1]} 小时，在第 ${padTime(Number(minute))} 分钟运行一次`;
+  }
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && day === '*' && month === '*' && weekday === '*') {
+    return `每天 ${formatTime(Number(hour), Number(minute))} 运行`;
+  }
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && day === '*' && month === '*' && weekday === '1-5') {
+    return `每个工作日 ${formatTime(Number(hour), Number(minute))} 运行`;
+  }
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && day === '*' && month === '*' && /^[0-6]$/.test(weekday)) {
+    return `每${formatWeekday(weekday)} ${formatTime(Number(hour), Number(minute))} 运行`;
+  }
+
+  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d+$/.test(day) && month === '*' && weekday === '*') {
+    return `每月 ${day} 日 ${formatTime(Number(hour), Number(minute))} 运行`;
+  }
+
+  return '已通过格式校验，运行时间按该 Cron 表达式执行';
+}
+
+function formatTime(hour, minute) {
+  return `${padTime(hour)}:${padTime(minute)}`;
+}
+
+function padTime(value) {
+  return String(value).padStart(2, '0');
+}
+
+function formatWeekday(value) {
+  return {
+    0: '周日',
+    1: '周一',
+    2: '周二',
+    3: '周三',
+    4: '周四',
+    5: '周五',
+    6: '周六'
+  }[value] || `周${value}`;
 }
 
 function openTaskModal(task, options = {}) {
@@ -896,6 +1133,8 @@ function syncScheduleTypeFields() {
   const isNormal = els.taskScheduleTypeInput.value === 'normal';
   els.taskCronInput.disabled = !isNormal;
   els.taskExtraSchedulesInput.disabled = !isNormal;
+  els.openCronGeneratorButton.disabled = !isNormal;
+  updateTaskCronHint();
 }
 
 function syncTaskScriptSourceFields() {
@@ -1814,19 +2053,9 @@ function describeViewFilters(view) {
 async function handleRunSubmit(event) {
   event.preventDefault();
   try {
+    const input = readRunForm();
     toast('脚本已开始启动');
-    const result = await api.runScriptOnce({
-      name: readValue('runNameInput') || '手动运行脚本',
-      scriptPath: readValue('runScriptPathInput') || undefined,
-      scriptContent: readValue('runScriptContentInput') || undefined,
-      args: readLines('runArgsInput'),
-      params: readJsonObject('runParamsInput', '结构化参数 JSON'),
-      cwd: readValue('runCwdInput') || 'data',
-      dependencies: readLines('runDependenciesInput'),
-      autoInstallDependencies: els.runAutoInstallInput.checked,
-      waitForCompletion: false,
-      timeoutMs: readInteger('runTimeoutInput', 30000)
-    });
+    const result = await api.runScriptOnce(input);
     els.runModal.close();
     await refreshTasksAndRuns();
     renderMetrics();
@@ -1837,6 +2066,30 @@ async function handleRunSubmit(event) {
   } catch (error) {
     toast(formatError(error));
   }
+}
+
+function readRunForm() {
+  const scriptPath = readValue('runScriptPathInput');
+  const scriptContent = readValue('runScriptContentInput');
+  if (!scriptPath && !scriptContent) throw new Error('请填写脚本路径或脚本内容');
+  if (scriptPath) validatePortablePathText(scriptPath, '脚本路径', { mustBeScript: true });
+  const cwd = readValue('runCwdInput') || 'data';
+  validatePortablePathText(cwd, '工作目录');
+  const dependencies = readLines('runDependenciesInput');
+  dependencies.forEach((name) => assertValidDependencyName(name));
+
+  return {
+    name: readValue('runNameInput') || '手动运行脚本',
+    scriptPath: scriptPath || undefined,
+    scriptContent: scriptContent || undefined,
+    args: readLines('runArgsInput'),
+    params: readJsonObject('runParamsInput', '结构化参数 JSON'),
+    cwd,
+    dependencies,
+    autoInstallDependencies: els.runAutoInstallInput.checked,
+    waitForCompletion: false,
+    timeoutMs: readNonNegativeInteger('runTimeoutInput', '超时毫秒', 30000)
+  };
 }
 
 function openRunModal() {
@@ -1990,9 +2243,13 @@ function openEnvModal(env) {
 async function handleEnvSubmit(event) {
   event.preventDefault();
   try {
+    const name = readRequiredValue('envNameInput', '变量名称');
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error('变量名称只能包含字母、数字和下划线，且不能以数字开头');
+    }
     await api.saveEnv({
       id: els.envIdInput.value || undefined,
-      name: readValue('envNameInput'),
+      name,
       value: els.envValueInput.value,
       remarks: readValue('envRemarksInput'),
       status: els.envStatusInput.value
@@ -2207,15 +2464,8 @@ function openSubscriptionModal(subscription) {
 async function handleSubscriptionSubmit(event) {
   event.preventDefault();
   try {
-    const saved = await api.saveSubscription({
-      id: els.subscriptionIdInput.value || undefined,
-      name: readValue('subscriptionNameInput'),
-      url: readValue('subscriptionUrlInput'),
-      branch: readValue('subscriptionBranchInput'),
-      schedule: readValue('subscriptionScheduleInput'),
-      status: els.subscriptionStatusInput.value,
-      autoCreateTasks: els.subscriptionAutoCreateTasksInput.checked
-    });
+    const input = readSubscriptionForm();
+    const saved = await api.saveSubscription(input);
     upsertSubscription(saved);
     els.subscriptionModal.close();
     await refreshQinglongOverview();
@@ -2223,6 +2473,35 @@ async function handleSubscriptionSubmit(event) {
   } catch (error) {
     toast(formatError(error));
   }
+}
+
+function readSubscriptionForm() {
+  const name = readRequiredValue('subscriptionNameInput', '订阅名称');
+  const url = readRequiredValue('subscriptionUrlInput', '订阅地址');
+  if (!looksLikeSubscriptionInput(url)) {
+    throw new Error('订阅地址格式不正确，请填写 GitHub 仓库、GitHub Raw、HTTP 文件、ql repo 或 ql raw');
+  }
+  const schedule = readValue('subscriptionScheduleInput');
+  if (schedule) assertValidCronExpression(schedule, '订阅 Cron 表达式');
+
+  return {
+    id: els.subscriptionIdInput.value || undefined,
+    name,
+    url,
+    branch: readValue('subscriptionBranchInput'),
+    schedule,
+    status: els.subscriptionStatusInput.value,
+    autoCreateTasks: els.subscriptionAutoCreateTasksInput.checked
+  };
+}
+
+function looksLikeSubscriptionInput(value) {
+  const text = String(value || '').trim();
+  return /^ql\s+(repo|raw)\s+/i.test(text) ||
+    /^https?:\/\//i.test(text) ||
+    /^git@github\.com:/i.test(text) ||
+    /^ssh:\/\/git@github\.com\//i.test(text) ||
+    /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+(?:\.git)?$/i.test(text);
 }
 
 async function deleteSubscription(id) {
@@ -2824,6 +3103,7 @@ async function saveCurrentScript() {
     return;
   }
   try {
+    validatePortablePathText(scriptPath, '脚本路径', { mustBeScript: true });
     const result = await api.saveScript({ path: scriptPath, content: els.scriptEditor.value });
     state.currentScriptPath = result.path;
     els.scriptPathInput.value = result.path;
@@ -2860,6 +3140,12 @@ async function runCurrentScript() {
   const scriptPath = readValue('scriptPathInput');
   if (!scriptPath) {
     toast('请输入脚本路径');
+    return;
+  }
+  try {
+    validatePortablePathText(scriptPath, '脚本路径', { mustBeScript: true });
+  } catch (error) {
+    toast(formatError(error));
     return;
   }
   if (state.launchingScriptPaths.has(scriptPath)) {
@@ -3573,6 +3859,12 @@ function readValue(id) {
   return els[id].value.trim();
 }
 
+function readRequiredValue(id, label) {
+  const value = readValue(id);
+  if (!value) throw new Error(`${label} 不能为空`);
+  return value;
+}
+
 function readLines(id) {
   return els[id].value
     .split(/\r?\n/)
@@ -3585,6 +3877,23 @@ function readInteger(id, fallback) {
   return Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
+function readNonNegativeInteger(id, label, fallback) {
+  const raw = els[id].value.trim();
+  if (!raw) return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} 必须是 0 或正整数`);
+  return value;
+}
+
+function readBoundedFormInteger(id, min, max, label) {
+  const raw = els[id].value.trim();
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`${label} 必须是 ${min}-${max} 的整数`);
+  }
+  return value;
+}
+
 function readBoundedInteger(id, min, max, fallback) {
   const value = Number(els[id].value);
   if (!Number.isInteger(value)) return fallback;
@@ -3594,11 +3903,45 @@ function readBoundedInteger(id, min, max, fallback) {
 function readJsonObject(id, label) {
   const raw = els[id].value.trim();
   if (!raw) return {};
-  const value = JSON.parse(raw);
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(`${label} 格式不正确，请填写合法 JSON 对象`);
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${label} 必须是 JSON 对象`);
+    throw new Error(`${label} 必须是 JSON 对象，不能是数组或普通文本`);
   }
   return value;
+}
+
+function validatePortablePathText(value, label, options = {}) {
+  const text = String(value || '').trim().replaceAll('\\', '/');
+  if (!text) {
+    if (options.required) throw new Error(`${label} 不能为空`);
+    return;
+  }
+  if (/^[a-zA-Z]:\//.test(text) || text.startsWith('/') || text.startsWith('//')) {
+    throw new Error(`${label} 必须填写安装目录内的相对路径，不能使用外部绝对路径`);
+  }
+  if (text.split('/').some((part) => part === '..')) {
+    throw new Error(`${label} 不能包含 ..`);
+  }
+  if (options.mustBeScript) {
+    if (!text.startsWith('data/scripts/')) throw new Error(`${label} 必须位于 data/scripts/ 下`);
+    if (!SCRIPT_FILE_EXTENSIONS.some((extension) => text.toLowerCase().endsWith(extension))) {
+      throw new Error(`${label} 必须是 ${SCRIPT_FILE_EXTENSIONS.join('、')} 脚本文件`);
+    }
+  }
+}
+
+function assertValidDependencyName(name) {
+  const value = String(name || '').trim();
+  if (!value) return;
+  const valid = value.startsWith('@')
+    ? /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/i.test(value)
+    : /^[a-z0-9][a-z0-9._~-]*$/i.test(value);
+  if (!valid) throw new Error(`依赖名称格式不正确: ${value}`);
 }
 
 function formatStatus(status) {

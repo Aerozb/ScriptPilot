@@ -102,7 +102,7 @@ function normalizeOptionalIsoDate(value, fallback) {
 }
 
 function normalizeSort(value, fallback) {
-  const allowedFields = ['name', 'scriptPath', 'status', 'cronExpression', 'lastDuration', 'lastStartedAt', 'nextRunAt', 'updatedAt', 'pinned'];
+  const allowedFields = ['name', 'cronExpression', 'lastDuration', 'lastStartedAt', 'nextRunAt', 'pinned'];
   const field = allowedFields.includes(value?.field) ? value.field : fallback.field;
   const direction = normalizeEnum(value?.direction, ['ASC', 'DESC'], fallback.direction);
   return { field, direction };

@@ -303,7 +303,7 @@ Content-Type: application/json
     </div>
 
     <dialog id="taskModal" class="modal wide">
-      <form id="taskForm" method="dialog" class="modal-card task-modal-card">
+      <form id="taskForm" method="dialog" class="modal-card task-modal-card" novalidate>
         <div class="modal-head">
           <h2 id="taskModalTitle">新建定时任务</h2>
           <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
@@ -312,7 +312,11 @@ Content-Type: application/json
         <div class="form-grid">
           <label><span>任务名称</span><input id="taskNameInput" required value="我的脚本任务" /></label>
           <label><span>定时类型</span><select id="taskScheduleTypeInput"><option value="normal">常规定时</option><option value="once">手动运行</option><option value="boot">开机运行</option></select></label>
-          <label><span>Cron 表达式</span><input id="taskCronInput" value="*/5 * * * *" placeholder="*/5 * * * *" /></label>
+          <div class="full cron-field">
+            <label><span>Cron 表达式</span><input id="taskCronInput" value="*/5 * * * *" placeholder="*/5 * * * *" /></label>
+            <button class="ghost" id="openCronGeneratorButton" type="button">生成表达式</button>
+            <small id="taskCronHint">不知道怎么写时点击“生成表达式”，按分钟、小时、每天、每周或每月生成。</small>
+          </div>
           <label><span>实例模式</span><select id="taskInstanceModeInput"><option value="single">单实例</option><option value="multiple">多实例</option></select></label>
           <label><span>脚本来源</span><select id="taskScriptSourceInput"><option value="existing">选择已有脚本</option><option value="inline">填写新脚本内容</option></select></label>
           <div class="full script-path-picker">
@@ -343,6 +347,64 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
           <button class="primary" type="submit">保存任务</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="cronGeneratorModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-head">
+          <div>
+            <h2>Cron 表达式生成器</h2>
+            <small>生成 5 段 Cron：分 时 日 月 周，适合本地定时任务。</small>
+          </div>
+          <button class="icon-button" type="button" data-close-modal>×</button>
+        </div>
+        <div class="cron-generator">
+          <section class="cron-presets">
+            <button class="ghost" type="button" data-cron-preset="*/5 * * * *">每 5 分钟</button>
+            <button class="ghost" type="button" data-cron-preset="*/10 * * * *">每 10 分钟</button>
+            <button class="ghost" type="button" data-cron-preset="0 * * * *">每小时整点</button>
+            <button class="ghost" type="button" data-cron-preset="0 8 * * *">每天 08:00</button>
+            <button class="ghost" type="button" data-cron-preset="0 9 * * 1-5">工作日 09:00</button>
+            <button class="ghost" type="button" data-cron-preset="0 9 * * 1">每周一 09:00</button>
+            <button class="ghost" type="button" data-cron-preset="0 0 1 * *">每月 1 日 00:00</button>
+          </section>
+          <div class="form-grid">
+            <label class="full"><span>生成方式</span><select id="cronModeInput">
+              <option value="every-minutes">每隔 N 分钟</option>
+              <option value="every-hours">每隔 N 小时</option>
+              <option value="daily">每天固定时间</option>
+              <option value="workdays">工作日固定时间</option>
+              <option value="weekly">每周固定时间</option>
+              <option value="monthly">每月固定日期</option>
+            </select></label>
+            <label data-cron-field="every-minutes"><span>间隔分钟，1-59</span><input id="cronEveryMinutesInput" type="number" min="1" max="59" value="5" /></label>
+            <label data-cron-field="every-hours"><span>间隔小时，1-23</span><input id="cronEveryHoursInput" type="number" min="1" max="23" value="1" /></label>
+            <label data-cron-field="every-hours"><span>第几分钟运行，0-59</span><input id="cronHourlyMinuteInput" type="number" min="0" max="59" value="0" /></label>
+            <label data-cron-field="daily workdays weekly monthly"><span>小时，0-23</span><input id="cronHourInput" type="number" min="0" max="23" value="8" /></label>
+            <label data-cron-field="daily workdays weekly monthly"><span>分钟，0-59</span><input id="cronMinuteInput" type="number" min="0" max="59" value="0" /></label>
+            <label data-cron-field="weekly"><span>星期</span><select id="cronWeekdayInput">
+              <option value="1">周一</option>
+              <option value="2">周二</option>
+              <option value="3">周三</option>
+              <option value="4">周四</option>
+              <option value="5">周五</option>
+              <option value="6">周六</option>
+              <option value="0">周日</option>
+            </select></label>
+            <label data-cron-field="monthly"><span>日期，1-31</span><input id="cronMonthDayInput" type="number" min="1" max="31" value="1" /></label>
+          </div>
+          <div class="cron-preview">
+            <span>生成结果</span>
+            <code id="cronPreviewExpression">*/5 * * * *</code>
+            <strong id="cronPreviewDescription">每隔 5 分钟运行一次</strong>
+            <small id="cronPreviewError"></small>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="ghost" type="button" data-close-modal>取消</button>
+          <button class="primary" id="applyCronExpressionButton" type="button">使用这个表达式</button>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="taskScriptPickerModal" class="modal wide">
@@ -409,7 +471,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
     </dialog>
 
     <dialog id="labelModal" class="modal">
-      <form id="labelForm" method="dialog" class="modal-card narrow">
+      <form id="labelForm" method="dialog" class="modal-card narrow" novalidate>
         <div class="modal-head">
           <h2>批量修改标签</h2>
           <button class="icon-button" type="button" data-close-modal>×</button>
@@ -424,7 +486,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
     </dialog>
 
     <dialog id="viewModal" class="modal">
-      <form id="viewForm" method="dialog" class="modal-card">
+      <form id="viewForm" method="dialog" class="modal-card" novalidate>
         <div class="modal-head">
           <h2 id="viewModalTitle">创建视图</h2>
           <button class="icon-button" type="button" data-close-modal>×</button>
@@ -459,7 +521,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params, trigger: proce
     </dialog>
 
     <dialog id="runModal" class="modal">
-      <form id="runForm" method="dialog" class="modal-card">
+      <form id="runForm" method="dialog" class="modal-card" novalidate>
         <div class="modal-head">
           <h2>直接运行脚本</h2>
           <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
@@ -488,7 +550,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
     </dialog>
 
     <dialog id="envModal" class="modal">
-      <form id="envForm" method="dialog" class="modal-card narrow">
+      <form id="envForm" method="dialog" class="modal-card narrow" novalidate>
         <div class="modal-head">
           <h2 id="envModalTitle">新建变量</h2>
           <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>
@@ -506,7 +568,7 @@ console.log(JSON.stringify({ args: process.argv.slice(2), params }));</textarea>
     </dialog>
 
     <dialog id="subscriptionModal" class="modal">
-      <form id="subscriptionForm" method="dialog" class="modal-card narrow">
+      <form id="subscriptionForm" method="dialog" class="modal-card narrow" novalidate>
         <div class="modal-head">
           <h2 id="subscriptionModalTitle">新建订阅</h2>
           <button class="icon-button" value="cancel" type="button" data-close-modal>×</button>

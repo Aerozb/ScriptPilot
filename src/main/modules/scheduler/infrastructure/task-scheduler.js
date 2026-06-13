@@ -37,9 +37,8 @@ export class TaskScheduler {
       const minuteKey = toMinuteKey(now);
       const tasks = await this.taskRepository.list();
       for (const task of tasks) {
-        if (!task.enabled || !task.cronExpression) continue;
-        if (String(task.cronExpression).startsWith('@')) continue;
-        if (!isCronDue(task.cronExpression, now)) continue;
+        if (!task.enabled) continue;
+        if (!isTaskDue(task, now)) continue;
         if (this.lastFiredMinutes.get(task.id) === minuteKey) continue;
 
         this.lastFiredMinutes.set(task.id, minuteKey);
@@ -54,6 +53,13 @@ export class TaskScheduler {
       this.isTicking = false;
     }
   }
+}
+
+function isTaskDue(task, now) {
+  return [task.cronExpression, ...(task.extraSchedules || [])]
+    .filter(Boolean)
+    .filter((expression) => !String(expression).startsWith('@'))
+    .some((expression) => isCronDue(expression, now));
 }
 
 function toMinuteKey(date) {

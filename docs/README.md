@@ -1,10 +1,11 @@
 # ScriptPilot 文档索引
 
-这里放开发、维护和 AI 协作相关文档。普通用户只需要看根目录的 [README.md](../README.md)。
+这里放 ScriptPilot 的使用、开发维护和 AI 协作说明。
 
 ## 用户文档
 
-- [用户说明](../README.md)：下载、启动、功能说明、数据目录和常见问题。
+- [用户说明](../README.md)：快速了解软件、下载启动、功能概览和常见问题。
+- [详细使用说明](usage.md)：从下载安装到每个功能怎么用的傻瓜式教程。
 
 ## 开发维护
 
@@ -18,4 +19,4 @@
 
 ## 发布产物
 
-构建输出位于 `release/win-unpacked/`，源码仓库不提交 `release/`。发布 GitHub Release 时，产物压缩包必须排除 `app/data/`。
+构建输出位于 `release/win-unpacked/`，源码仓库不提交 `release/`。发 GitHub Release 时，压缩包必须排除 `app/data/`。
