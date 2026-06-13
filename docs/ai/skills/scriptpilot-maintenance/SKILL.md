@@ -29,6 +29,7 @@ Use this skill for ScriptPilot implementation, validation, and release work.
 - Do not create a second canonical AI entry file.
 - Do not overwrite or package `release/win-unpacked/app/data/`.
 - Do not commit `release/`, `.tools/`, `node_modules/`, local data, logs, CK, or cache.
+- Update `docs/usage.md` for every user-facing feature addition, behavior change, interaction copy change, or new setting; update `README.md` too when the overview or feature list changes.
 - Sync changed app resources into `release/win-unpacked/app/resources/app/` when the existing portable EXE should see the change after restart.
 - Increment `package.json`, `package-lock.json`, the Git tag, zip name, and release title for every new published artifact.
 - Keep GitHub Release notes user-facing and Chinese-only; do not list artifact names, checksum sections, SHA256 values, or `.sha256` filenames in the notes.
