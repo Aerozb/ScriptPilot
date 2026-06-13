@@ -323,6 +323,18 @@ try {
       await cwdHelp.hover();
       await expectText(page, '#helpTooltip', '脚本运行时的当前目录');
       assert(await page.locator('#helpTooltip').isVisible(), '字段提示悬停后没有显示');
+      assert(
+        await page.locator('#helpTooltip').evaluate((node) => node.parentElement?.id === 'taskModal'),
+        '字段提示没有挂到当前弹窗层内'
+      );
+      assert(
+        await page.locator('#helpTooltip').evaluate((node) => {
+          const tooltipRect = node.getBoundingClientRect();
+          const modalRect = document.querySelector('#taskModal').getBoundingClientRect();
+          return tooltipRect.left >= modalRect.left - 1 && tooltipRect.right <= modalRect.right + 1;
+        }),
+        '字段提示超出了当前弹窗边界'
+      );
 
       const logNameHelp = page.locator('#taskModal .help-icon[aria-label="日志名称说明"]');
       await logNameHelp.focus();

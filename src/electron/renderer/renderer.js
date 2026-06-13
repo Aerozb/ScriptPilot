@@ -351,7 +351,11 @@ function isInsideNode(parent, target) {
   return target instanceof Node && parent.contains(target);
 }
 
-function ensureHelpTooltip() {
+function getHelpTooltipHost(trigger) {
+  return trigger?.closest?.('dialog[open]') || document.body;
+}
+
+function ensureHelpTooltip(host = document.body) {
   let tooltip = document.getElementById('helpTooltip');
   if (!tooltip) {
     tooltip = document.createElement('div');
@@ -360,7 +364,9 @@ function ensureHelpTooltip() {
     tooltip.setAttribute('role', 'tooltip');
     tooltip.setAttribute('aria-hidden', 'true');
     tooltip.hidden = true;
-    document.body.append(tooltip);
+  }
+  if (tooltip.parentElement !== host) {
+    host.append(tooltip);
   }
   els.helpTooltip = tooltip;
   return tooltip;
@@ -368,7 +374,7 @@ function ensureHelpTooltip() {
 
 function showHelpTooltip(trigger) {
   if (!trigger?.dataset?.tooltip) return;
-  const tooltip = ensureHelpTooltip();
+  const tooltip = ensureHelpTooltip(getHelpTooltipHost(trigger));
   activeTooltipTrigger = trigger;
   tooltip.textContent = trigger.dataset.tooltip;
   tooltip.style.visibility = 'hidden';
@@ -396,24 +402,47 @@ function positionHelpTooltip(trigger) {
   const tooltip = els.helpTooltip;
   const margin = 12;
   const gap = 10;
+  const bounds = getHelpTooltipBounds(trigger, margin);
   const triggerRect = trigger.getBoundingClientRect();
   const tooltipRect = tooltip.getBoundingClientRect();
   const center = triggerRect.left + triggerRect.width / 2;
   let left = center - tooltipRect.width / 2;
-  left = Math.max(margin, Math.min(left, window.innerWidth - tooltipRect.width - margin));
+  const maxLeft = Math.max(bounds.left, bounds.right - tooltipRect.width);
+  left = Math.max(bounds.left, Math.min(left, maxLeft));
 
   let top = triggerRect.bottom + gap;
   let placement = 'bottom';
-  if (top + tooltipRect.height + margin > window.innerHeight) {
+  if (top + tooltipRect.height > bounds.bottom) {
     top = triggerRect.top - tooltipRect.height - gap;
     placement = 'top';
   }
+  const maxTop = Math.max(bounds.top, bounds.bottom - tooltipRect.height);
+  top = Math.max(bounds.top, Math.min(top, maxTop));
 
   tooltip.dataset.placement = placement;
   tooltip.style.left = `${Math.round(left)}px`;
-  tooltip.style.top = `${Math.round(Math.max(margin, top))}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
   const arrowLeft = clamp(center - left, 14, tooltipRect.width - 14);
   tooltip.style.setProperty('--tooltip-arrow-left', `${Math.round(arrowLeft)}px`);
+}
+
+function getHelpTooltipBounds(trigger, margin) {
+  const dialog = trigger.closest?.('dialog[open]');
+  if (dialog) {
+    const rect = dialog.getBoundingClientRect();
+    return {
+      left: rect.left + margin,
+      right: rect.right - margin,
+      top: rect.top + margin,
+      bottom: rect.bottom - margin
+    };
+  }
+  return {
+    left: margin,
+    right: window.innerWidth - margin,
+    top: margin,
+    bottom: window.innerHeight - margin
+  };
 }
 
 function setScriptListWidth(width) {
