@@ -66,6 +66,7 @@ app/data/
 ## GitHub
 
 - 每次发布 GitHub Release 必须递增版本号，例如 `v0.1.0` -> `v0.1.1`。
+- 只要上传新的便携产物，就必须新建递增 tag；禁止复用旧 tag 覆盖新功能产物。
 - 禁止把新功能覆盖发布到旧 tag；旧版本只在补传同一版本校验文件时才允许覆盖附件。
 - 发布前必须同步修改 `package.json` 和 `package-lock.json` 的版本号。
 - 发布压缩包命名必须带当前版本号，例如 `ScriptPilot-v0.1.1-portable.zip`。
@@ -73,3 +74,4 @@ app/data/
 - 源码通过 Git commit/push 上传。
 - 便携产物通过 GitHub Release 附件上传，不提交进源码仓库。
 - 上传前先检查压缩包内容，确认没有 `app/data/`。
+- 发布完成后再次检查 `git status`，只能剩下被忽略的 `release/`、`node_modules/` 或运行时目录。

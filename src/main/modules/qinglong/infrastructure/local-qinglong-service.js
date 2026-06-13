@@ -1341,6 +1341,7 @@ function describeSubscriptionSource(source) {
 
 function extractScriptCron(content) {
   const text = String(content || '').split(/\r?\n/).slice(0, 160).join('\n');
+  const envName = extractEnvTaskName(text);
   const quotedMatch = text.match(/^\s*(?:\/\/|\/\*|\*|#)?\s*cron\s+["']([^"']+)["'](?:\s+([^,\s]+))?(?:.*?tag[:：]\s*([^\r\n]+))?/im);
   if (quotedMatch) {
     const cron = normalizeScriptCron(quotedMatch[1]);
@@ -1348,7 +1349,7 @@ function extractScriptCron(content) {
       return {
         cron,
         rawCron: quotedMatch[1],
-        name: normalizeTaskName(quotedMatch[3]) || normalizeTaskName(quotedMatch[2])
+        name: envName || normalizeTaskName(quotedMatch[3]) || normalizeTaskName(quotedMatch[2])
       };
     }
   }
@@ -1360,7 +1361,8 @@ function extractScriptCron(content) {
     if (cron) {
       return {
         cron,
-        rawCron: raw
+        rawCron: raw,
+        name: envName
       };
     }
   }
@@ -1372,12 +1374,18 @@ function extractScriptCron(content) {
     if (cron) {
       return {
         cron,
-        rawCron: raw
+        rawCron: raw,
+        name: envName
       };
     }
   }
 
   return undefined;
+}
+
+function extractEnvTaskName(text) {
+  const match = String(text || '').match(/\bnew\s+Env\s*\(\s*(['"`])([^'"`]{1,120})\1\s*\)/m);
+  return normalizeTaskName(match?.[2]);
 }
 
 function normalizeScriptCron(value) {

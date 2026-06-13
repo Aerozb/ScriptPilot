@@ -30,3 +30,4 @@ Use this skill for ScriptPilot implementation, validation, and release work.
 - Do not overwrite or package `release/win-unpacked/app/data/`.
 - Do not commit `release/`, `.tools/`, `node_modules/`, local data, logs, CK, or cache.
 - Sync changed app resources into `release/win-unpacked/app/resources/app/` when the existing portable EXE should see the change after restart.
+- Increment `package.json`, `package-lock.json`, the Git tag, zip name, and release title for every new published artifact.

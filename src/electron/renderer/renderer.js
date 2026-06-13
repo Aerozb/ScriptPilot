@@ -20,6 +20,7 @@ const state = {
   envs: [],
   configs: [],
   scripts: [],
+  scriptTree: undefined,
   subscriptions: [],
   dependencies: [],
   dependencyHistory: [],
@@ -56,6 +57,7 @@ const state = {
 };
 
 const els = {};
+const htmlCache = new WeakMap();
 let pendingConfirmResolver;
 let logCleanupSaveTimer;
 let logCleanupSaveSeq = 0;
@@ -77,6 +79,13 @@ function bindElements() {
   for (const node of document.querySelectorAll('[id]')) {
     els[node.id] = node;
   }
+}
+
+function setHtml(element, html) {
+  if (!element || htmlCache.get(element) === html) return false;
+  htmlCache.set(element, html);
+  element.innerHTML = html;
+  return true;
 }
 
 function bindEvents() {
@@ -331,6 +340,7 @@ async function refreshQinglongData() {
   state.envs = envs.items || [];
   state.configs = configs.items || [];
   state.scripts = scripts.items || [];
+  state.scriptTree = undefined;
   state.subscriptions = subscriptions.items || [];
   state.dependencies = dependencies.items || [];
   state.dependencyHistory = dependencies.history || [];
@@ -436,12 +446,12 @@ function renderTasks() {
   renderTaskPagination(rows.length, pageRows.length);
 
   if (!pageRows.length) {
-    els.taskTable.innerHTML = `<div class="empty">暂无定时任务，点击“新建任务”创建第一个脚本任务。</div>`;
+    setHtml(els.taskTable, `<div class="empty">暂无定时任务，点击“新建任务”创建第一个脚本任务。</div>`);
     updateTaskButtons();
     return;
   }
 
-  els.taskTable.innerHTML = `
+  setHtml(els.taskTable, `
     <table class="data-table ql-cron-table">
       <thead>
         <tr>
@@ -461,7 +471,7 @@ function renderTasks() {
         ${pageRows.map((task) => renderTaskRow(task)).join('')}
       </tbody>
     </table>
-  `;
+  `);
 
   updateTaskButtons();
 }
@@ -696,9 +706,9 @@ function renderTaskPagination(total, currentCount) {
 function renderTaskViews() {
   const views = getVisibleTaskViews();
   const activeId = getActiveTaskView()?.id || 'all';
-  els.taskViewTabs.innerHTML = views.map((view) => `
+  setHtml(els.taskViewTabs, views.map((view) => `
     <button class="view-tab ${view.id === activeId ? 'active' : ''}" data-task-view="${escapeAttr(view.id)}">${escapeHtml(view.name)}</button>
-  `).join('');
+  `).join(''));
 }
 
 async function handleTaskViewTabsClick(event) {
@@ -911,6 +921,7 @@ async function openTaskScriptPicker() {
     if (!state.scripts.length) {
       const scripts = await api.listScripts();
       state.scripts = scripts.items || [];
+      state.scriptTree = undefined;
     }
     state.taskScriptPickerSelectedPaths = new Set(state.taskFormScriptPaths);
     state.taskScriptPickerExpandedDirs = new Set(['data/scripts']);
@@ -946,7 +957,7 @@ function renderTaskScriptPicker() {
   els.confirmTaskScriptPickerButton.disabled = state.taskScriptPickerSelectedPaths.size === 0;
   if (!rows.length) {
     state.taskScriptPickerVisibleTree = undefined;
-    els.taskScriptPickerList.innerHTML = '<div class="empty">暂无可选脚本，请先在脚本管理或订阅管理中保存脚本。</div>';
+    setHtml(els.taskScriptPickerList, '<div class="empty">暂无可选脚本，请先在脚本管理或订阅管理中保存脚本。</div>');
     return;
   }
 
@@ -959,7 +970,7 @@ function renderTaskScriptPicker() {
   }
   const expandedDirs = state.taskScriptPickerExpandedDirs;
   syncVisibleScriptDirectories(tree, expandedDirs);
-  els.taskScriptPickerList.innerHTML = `<div class="script-tree script-picker-tree">${renderTaskScriptPickerTreeChildren(tree, 0, expandedDirs)}</div>`;
+  setHtml(els.taskScriptPickerList, `<div class="script-tree script-picker-tree">${renderTaskScriptPickerTreeChildren(tree, 0, expandedDirs)}</div>`);
   els.taskScriptPickerList.querySelectorAll('[data-task-script-picker-dir-check]').forEach((checkbox) => {
     checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
   });
@@ -1827,12 +1838,12 @@ function renderEnvs() {
   const allSelected = rows.length > 0 && rows.every((item) => state.selectedEnvIds.has(item.id));
 
   if (!rows.length) {
-    els.envTable.innerHTML = `<div class="empty">暂无环境变量，点击“新建变量”添加。</div>`;
+    setHtml(els.envTable, `<div class="empty">暂无环境变量，点击“新建变量”添加。</div>`);
     updateEnvButtons();
     return;
   }
 
-  els.envTable.innerHTML = `
+  setHtml(els.envTable, `
     <table class="data-table">
       <thead>
         <tr>
@@ -1859,7 +1870,7 @@ function renderEnvs() {
         `).join('')}
       </tbody>
     </table>
-  `;
+  `);
   updateEnvButtons();
 }
 
@@ -2038,12 +2049,12 @@ function renderSubscriptions() {
   const rows = state.subscriptions;
   const allSelected = rows.length > 0 && rows.every((item) => state.selectedSubscriptionIds.has(item.id));
   if (!rows.length) {
-    els.subscriptionTable.innerHTML = `<div class="empty">暂无订阅，点击“新建订阅”添加。</div>`;
+    setHtml(els.subscriptionTable, `<div class="empty">暂无订阅，点击“新建订阅”添加。</div>`);
     updateSubscriptionButtons();
     return;
   }
 
-  els.subscriptionTable.innerHTML = `
+  setHtml(els.subscriptionTable, `
     <table class="data-table">
       <thead>
         <tr>
@@ -2074,7 +2085,7 @@ function renderSubscriptions() {
         `).join('')}
       </tbody>
     </table>
-  `;
+  `);
   updateSubscriptionButtons();
 }
 
@@ -2462,15 +2473,15 @@ async function batchDeleteSubscriptions() {
 
 function renderConfigs() {
   if (!state.configs.length) {
-    els.configList.innerHTML = '<div class="empty">暂无配置文件</div>';
+    setHtml(els.configList, '<div class="empty">暂无配置文件</div>');
     return;
   }
-  els.configList.innerHTML = state.configs.map((item) => `
+  setHtml(els.configList, state.configs.map((item) => `
     <button class="file-item ${state.currentConfigName === item.name ? 'active' : ''}" data-config-name="${escapeAttr(item.name)}">
       <strong>${escapeHtml(item.name)}</strong>
       <small>${escapeHtml(formatBytes(item.size))} · ${escapeHtml(formatDateTime(item.updatedAt))}</small>
     </button>
-  `).join('');
+  `).join(''));
 }
 
 function handleConfigListClick(event) {
@@ -2518,6 +2529,7 @@ async function openCurrentConfigDirectory() {
 async function refreshScripts() {
   const scripts = await api.listScripts();
   state.scripts = scripts.items || [];
+  state.scriptTree = undefined;
   state.selectedScriptPaths = keepExistingSelection(state.selectedScriptPaths, state.scripts.map((item) => item.path));
   renderMetrics();
   renderScripts();
@@ -2526,7 +2538,7 @@ async function refreshScripts() {
 function renderScripts() {
   updateScriptButtons();
   if (!state.scripts.length) {
-    els.scriptList.innerHTML = '<div class="empty">暂无脚本文件</div>';
+    setHtml(els.scriptList, '<div class="empty">暂无脚本文件</div>');
     if (els.selectAllScriptsInput) {
       els.selectAllScriptsInput.checked = false;
       els.selectAllScriptsInput.indeterminate = false;
@@ -2534,14 +2546,19 @@ function renderScripts() {
     return;
   }
   const allSelected = state.scripts.length > 0 && state.scripts.every((item) => state.selectedScriptPaths.has(item.path));
-  const tree = buildScriptTree(state.scripts);
+  const tree = getScriptTree();
   expandScriptParents(state.currentScriptPath);
   syncVisibleScriptDirectories(tree);
-  els.scriptList.innerHTML = `<div class="script-tree">${renderScriptTreeChildren(tree, 0)}</div>`;
+  setHtml(els.scriptList, `<div class="script-tree">${renderScriptTreeChildren(tree, 0)}</div>`);
   els.selectAllScriptsInput.checked = allSelected;
   els.scriptList.querySelectorAll('[data-script-dir-check]').forEach((checkbox) => {
     checkbox.indeterminate = checkbox.dataset.indeterminate === 'true';
   });
+}
+
+function getScriptTree() {
+  if (!state.scriptTree) state.scriptTree = buildScriptTree(state.scripts);
+  return state.scriptTree;
 }
 
 function handleScriptListClick(event) {
@@ -2589,12 +2606,14 @@ function buildScriptTree(scripts) {
     const fileName = parts.pop();
     let current = root;
     let currentPath = 'data/scripts';
+    current.scriptPaths.push(item.path);
     for (const dirName of parts) {
       currentPath = `${currentPath}/${dirName}`;
       if (!current.dirs.has(dirName)) {
         current.dirs.set(dirName, createScriptTreeNode(dirName, currentPath));
       }
       current = current.dirs.get(dirName);
+      current.scriptPaths.push(item.path);
     }
     current.files.push({ ...item, name: fileName || item.name });
   }
@@ -2606,7 +2625,8 @@ function createScriptTreeNode(name, nodePath) {
     name,
     path: nodePath,
     dirs: new Map(),
-    files: []
+    files: [],
+    scriptPaths: []
   };
 }
 
@@ -2675,8 +2695,7 @@ function collectVisibleScriptPaths(node) {
 }
 
 function collectVisibleRootScriptPaths() {
-  const tree = buildScriptTree(state.scripts);
-  return collectVisibleScriptPaths(tree);
+  return state.scripts.map((item) => item.path);
 }
 
 function updateSelectAllScriptsState() {
@@ -2688,10 +2707,7 @@ function updateSelectAllScriptsState() {
 }
 
 function collectScriptPaths(node) {
-  return [
-    ...node.files.map((item) => item.path),
-    ...[...node.dirs.values()].flatMap((child) => collectScriptPaths(child))
-  ];
+  return node?.scriptPaths || [];
 }
 
 function findScriptTreeNode(node, dirPath) {
@@ -2786,6 +2802,7 @@ async function saveCurrentScript() {
     els.scriptPathInput.value = result.path;
     const scripts = await api.listScripts();
     state.scripts = scripts.items || [];
+    state.scriptTree = undefined;
     renderMetrics();
     renderScripts();
     toast('脚本已保存');
@@ -2866,6 +2883,7 @@ async function deleteCurrentScript() {
     els.scriptEditor.value = '';
     const scripts = await api.listScripts();
     state.scripts = scripts.items || [];
+    state.scriptTree = undefined;
     renderMetrics();
     renderScripts();
     toast('脚本已删除');
@@ -2945,9 +2963,9 @@ async function refreshDependencies() {
 
 function renderDependencies() {
   if (!state.dependencies.length) {
-    els.dependencyTable.innerHTML = '<div class="empty">暂无手动安装依赖。脚本缺依赖时也会自动安装到 data/node_modules。</div>';
+    setHtml(els.dependencyTable, '<div class="empty">暂无手动安装依赖。脚本缺依赖时也会自动安装到 data/node_modules。</div>');
   } else {
-    els.dependencyTable.innerHTML = `
+    setHtml(els.dependencyTable, `
       <table class="data-table">
         <thead><tr><th style="width: 280px">名称</th><th>版本</th><th style="width: 120px">操作</th></tr></thead>
         <tbody>
@@ -2960,17 +2978,17 @@ function renderDependencies() {
           `).join('')}
         </tbody>
       </table>
-    `;
+    `);
   }
 
-  els.dependencyHistory.innerHTML = state.dependencyHistory.length
+  setHtml(els.dependencyHistory, state.dependencyHistory.length
     ? state.dependencyHistory.map((item) => `
       <div class="timeline-item">
         <span>${escapeHtml(actionName(item.action))}: ${escapeHtml(item.name)}</span>
         <small>${escapeHtml(item.status)} · ${escapeHtml(formatDateTime(item.createdAt))}</small>
       </div>
     `).join('')
-    : '<div class="empty">暂无依赖操作记录</div>';
+    : '<div class="empty">暂无依赖操作记录</div>');
 }
 
 function handleDependencyTableClick(event) {
@@ -3025,11 +3043,11 @@ async function removeDependency(name) {
 
 function renderRuns() {
   if (!state.runs.length) {
-    els.runList.innerHTML = '<div class="empty">暂无运行记录</div>';
+    setHtml(els.runList, '<div class="empty">暂无运行记录</div>');
     return;
   }
   const groups = groupRunsByScript(state.runs);
-  els.runList.innerHTML = `
+  setHtml(els.runList, `
     <div class="run-groups">
       ${groups.map((group) => `
         <section class="run-group">
@@ -3049,7 +3067,7 @@ function renderRuns() {
         </section>
       `).join('')}
     </div>
-  `;
+  `);
 }
 
 function renderRunsIfVisible() {
