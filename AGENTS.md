@@ -38,7 +38,7 @@
 - 不要把 CK、日志、本地数据、缓存、测试临时目录提交或打包发布。
 - UI 改动要同步到 `release/win-unpacked/app/resources/app/` 对应源码文件。
 - 功能新增、功能变动、交互文案或配置项变化时，必须同步更新面向用户的 `docs/usage.md`；影响首页概览、截图说明或功能列表时，也同步更新 `README.md`。
-- 当前 EXE 正在运行时，不要强杀进程；如需改内层 EXE 资源，提示用户先关闭程序。
+- 编译、构建或更新 `release/win-unpacked` 前，如发现 `ScriptPilot.exe` 正在运行，先结束相关进程；不得删除或覆盖 `release/win-unpacked/app/data/`。
 - 推送 GitHub 或发 Release 前，先确认产物不包含 `app/data/`。
 - Git commit message 必须使用中文，简洁说明本次改动；不要再使用英文提交说明。
 - GitHub Release 页面说明只写中文更新说明和修复内容；不要写“发布产物”“校验信息”、SHA256 或 `.sha256` 文件名；不要生成或上传 `.sha256` 附件。
