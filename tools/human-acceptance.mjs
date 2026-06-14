@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 const root = process.cwd();
-const sourceReleaseRoot = path.join(root, 'release', 'win-unpacked');
+const sourceReleaseRoot = process.env.SCRIPTPILOT_ACCEPTANCE_RELEASE_ROOT
+  ? path.resolve(process.env.SCRIPTPILOT_ACCEPTANCE_RELEASE_ROOT)
+  : path.join(root, 'release', 'win-unpacked');
 const releaseRoot = path.join(os.tmpdir(), `scriptpilot-human-acceptance-${Date.now()}`);
 const launcherPath = path.join(releaseRoot, 'ScriptPilot.exe');
 const appRoot = path.join(releaseRoot, 'app');

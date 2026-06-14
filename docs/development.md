@@ -84,6 +84,14 @@ npm install
 npm run dist:dir
 ```
 
+发布 GitHub Release 时使用隔离目录，避免覆盖本机正在使用的 `release/win-unpacked/app/data/`：
+
+```powershell
+npm run dist:publish
+```
+
+`dist:publish` 会构建到 `release/publish-v版本号/win-unpacked/`。`tools/fix-portable-runtime.mjs` 和 `tools/create-portable-layout.mjs` 支持通过 `SCRIPTPILOT_RELEASE_ROOT` 指定便携根目录；未设置时仍默认处理 `release/win-unpacked/`。
+
 构建产物：
 
 ```text
@@ -144,6 +152,14 @@ src/electron/renderer/renderer.js
 目录版构建后运行：
 
 ```powershell
+node tools\human-acceptance.mjs
+```
+
+验收指定隔离发布目录时：
+
+```powershell
+$version = node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version"
+$env:SCRIPTPILOT_ACCEPTANCE_RELEASE_ROOT = "release\publish-v$version\win-unpacked"
 node tools\human-acceptance.mjs
 ```
 

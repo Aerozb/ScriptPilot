@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const releaseRoot = path.resolve('release/win-unpacked');
+const releaseRoot = resolveReleaseRoot();
 const internalDirName = 'app';
 const internalDir = path.join(releaseRoot, internalDirName);
 const rootLauncher = path.join(releaseRoot, 'ScriptPilot.exe');
@@ -93,4 +93,13 @@ async function pathExists(filePath) {
   } catch {
     return false;
   }
+}
+
+function resolveReleaseRoot() {
+  const envValue = process.env.SCRIPTPILOT_RELEASE_ROOT?.trim();
+  if (envValue) {
+    return path.resolve(envValue);
+  }
+
+  return path.resolve('release/win-unpacked');
 }

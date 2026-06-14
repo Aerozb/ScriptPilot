@@ -39,6 +39,8 @@ await check('JS 语法检查覆盖关键入口', async () => {
     'src/main/modules/workspace/infrastructure/local-workspace-service.js',
     'src/main/modules/updates/infrastructure/github-update-service.js',
     'src/main/shared/infrastructure/process/process-runner.js',
+    'tools/create-portable-layout.mjs',
+    'tools/fix-portable-runtime.mjs',
     'tools/human-acceptance.mjs',
     'tools/quality-check.mjs'
   ];

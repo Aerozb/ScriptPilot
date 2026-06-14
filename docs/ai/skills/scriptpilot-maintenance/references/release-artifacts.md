@@ -7,6 +7,14 @@ npm install
 npm run dist:dir
 ```
 
+发布 GitHub Release 时优先使用隔离输出目录：
+
+```powershell
+npm run dist:publish
+```
+
+`dist:publish` 输出到 `release/publish-v版本号/win-unpacked/`，不触碰本机正在使用的 `release/win-unpacked/app/data/`。如需手动指定便携根目录，可设置 `SCRIPTPILOT_RELEASE_ROOT` 后再运行 `tools/fix-portable-runtime.mjs` 和 `tools/create-portable-layout.mjs`。
+
 当前发布的是目录版便携产物：
 
 ```text
