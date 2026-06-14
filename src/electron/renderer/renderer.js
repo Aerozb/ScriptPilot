@@ -26,6 +26,15 @@ const state = {
   subscriptions: [],
   dependencies: [],
   dependencyHistory: [],
+  latestRunByTaskId: new Map(),
+  nextRunCache: new Map(),
+  dataLoaded: {
+    envs: false,
+    configs: false,
+    scripts: false,
+    subscriptions: false,
+    dependencies: false
+  },
   installingDependency: false,
   selectedTaskIds: new Set(),
   selectedEnvIds: new Set(),
@@ -70,6 +79,7 @@ let taskLogRefreshTimer;
 let taskLogRefreshSettleTicks = 0;
 let subscriptionLogRefreshTimer;
 let taskScriptPickerRenderFrame;
+let workspaceOverviewTimer;
 let envRenderFrame;
 let cronGeneratorExpression = '*/5 * * * *';
 let activeTooltipTrigger;
@@ -464,9 +474,10 @@ async function init() {
   await loadAppearanceSettings();
   activatePage(state.activePage || 'crontab');
   await Promise.all([
-    refreshAll(),
+    refreshCrontabPage(),
     refreshStartupStatus()
   ]);
+  scheduleWorkspaceOverviewRefresh();
   if (!state.info.acceptanceTest) {
     window.setTimeout(() => checkForUpdates({ silent: true }), 1200);
   }
@@ -486,7 +497,7 @@ async function refreshTasksAndRuns() {
     api.listRuns({ limit: 200 })
   ]);
   state.tasks = tasks.items || [];
-  state.runs = runs.items || [];
+  setRuns(runs.items || []);
 }
 
 async function refreshTasksOnly() {
@@ -495,33 +506,32 @@ async function refreshTasksOnly() {
 }
 
 async function refreshWorkspaceData() {
-  const [overview, envs, configs, scripts, subscriptions, dependencies] = await Promise.all([
-    api.getWorkspaceOverview(),
+  const [envs, configs, scripts, subscriptions, dependencies] = await Promise.all([
     api.listEnvs(),
     api.listConfigs(),
     api.listScripts(),
     api.listSubscriptions(),
     api.listDependencies()
   ]);
-  state.overview = overview;
   state.envs = envs.items || [];
   state.configs = configs.items || [];
-  state.scripts = scripts.items || [];
-  state.scriptTree = undefined;
+  setScripts(scripts.items || []);
   state.subscriptions = subscriptions.items || [];
   state.dependencies = dependencies.items || [];
   state.dependencyHistory = dependencies.history || [];
+  Object.assign(state.dataLoaded, {
+    envs: true,
+    configs: true,
+    scripts: true,
+    subscriptions: true,
+    dependencies: true
+  });
+  state.overview = deriveWorkspaceOverview();
 }
 
 function renderAll() {
   renderMetrics();
-  renderTasks();
-  renderEnvs();
-  renderSubscriptions();
-  renderConfigs();
-  renderScripts();
-  renderDependencies();
-  renderRuns();
+  renderActivePage();
 }
 
 async function showPage(pageName) {
@@ -545,11 +555,13 @@ function activatePage(pageName) {
 async function refreshActivePage(pageName) {
   try {
     if (pageName === 'crontab') await refreshCrontabPage();
+    else if (pageName === 'env') await refreshEnvs();
     else if (pageName === 'script') await refreshScripts();
     else if (pageName === 'config') await refreshConfigs();
     else if (pageName === 'log') await refreshRuns();
     else if (pageName === 'dependence') await refreshDependencies();
     else if (pageName === 'subscription') await refreshSubscriptions();
+    else if (pageName === 'setting') await refreshStartupStatus();
   } catch (error) {
     toast(formatError(error));
   }
@@ -559,6 +571,60 @@ async function refreshCrontabPage() {
   await refreshTasksAndRuns();
   renderMetrics();
   renderTasks();
+}
+
+function renderActivePage(pageName = state.activePage) {
+  if (pageName === 'crontab') renderTasks();
+  else if (pageName === 'env') renderEnvs();
+  else if (pageName === 'script') renderScripts();
+  else if (pageName === 'config') renderConfigs();
+  else if (pageName === 'log') renderRuns();
+  else if (pageName === 'dependence') renderDependencies();
+  else if (pageName === 'subscription') renderSubscriptions();
+}
+
+function scheduleWorkspaceOverviewRefresh() {
+  clearTimeout(workspaceOverviewTimer);
+  workspaceOverviewTimer = window.setTimeout(() => {
+    workspaceOverviewTimer = undefined;
+    refreshWorkspaceOverview().catch(() => undefined);
+  }, 350);
+}
+
+function setRuns(items) {
+  state.runs = Array.isArray(items) ? items : [];
+  state.latestRunByTaskId = buildLatestRunByTaskId(state.runs);
+}
+
+function buildLatestRunByTaskId(runs) {
+  const latest = new Map();
+  for (const run of runs) {
+    if (!run?.taskId) continue;
+    const existing = latest.get(run.taskId);
+    if (!existing || new Date(run.startedAt || 0).getTime() > new Date(existing.startedAt || 0).getTime()) {
+      latest.set(run.taskId, run);
+    }
+  }
+  return latest;
+}
+
+function setScripts(items) {
+  state.scripts = Array.isArray(items) ? items : [];
+  state.scriptTree = undefined;
+  state.taskScriptPickerVisibleTree = undefined;
+  state.taskScriptPickerLastKeyword = '';
+  state.dataLoaded.scripts = true;
+}
+
+function deriveWorkspaceOverview() {
+  return {
+    ...(state.overview || {}),
+    envCount: state.envs.length,
+    enabledEnvCount: state.envs.filter((item) => item.status === 'enabled').length,
+    subscriptionCount: state.subscriptions.length,
+    scriptCount: state.scripts.length,
+    dependencyCount: state.dependencies.length
+  };
 }
 
 function confirmAction(options) {
@@ -600,9 +666,13 @@ function resolveConfirm(value) {
 function renderMetrics() {
   if (els.metricTaskCount) els.metricTaskCount.textContent = String(state.tasks.length);
   if (els.metricRunCount) els.metricRunCount.textContent = String(state.runs.length);
-  const enabledEnvCount = state.envs.filter((item) => item.status === 'enabled').length;
-  if (els.metricEnvCount) els.metricEnvCount.textContent = `${enabledEnvCount}/${state.envs.length}`;
-  if (els.metricScriptCount) els.metricScriptCount.textContent = String(state.scripts.length);
+  const envCount = state.dataLoaded.envs ? state.envs.length : Number(state.overview?.envCount || 0);
+  const enabledEnvCount = state.dataLoaded.envs
+    ? state.envs.filter((item) => item.status === 'enabled').length
+    : Number(state.overview?.enabledEnvCount || 0);
+  const scriptCount = state.dataLoaded.scripts ? state.scripts.length : Number(state.overview?.scriptCount || 0);
+  if (els.metricEnvCount) els.metricEnvCount.textContent = `${enabledEnvCount}/${envCount}`;
+  if (els.metricScriptCount) els.metricScriptCount.textContent = String(scriptCount);
 }
 
 function renderTasks() {
@@ -1341,10 +1411,11 @@ function createTaskNameForScript(baseName, scriptPath, count) {
 async function openTaskScriptPicker() {
   if (els.taskScriptSourceInput.value !== 'existing') return;
   try {
-    if (!state.scripts.length) {
+    if (!state.dataLoaded.scripts) {
       const scripts = await api.listScripts();
-      state.scripts = scripts.items || [];
-      state.scriptTree = undefined;
+      setScripts(scripts.items || []);
+      state.overview = deriveWorkspaceOverview();
+      renderMetrics();
     }
     state.taskScriptPickerSelectedPaths = new Set(state.taskFormScriptPaths);
     state.taskScriptPickerExpandedDirs = new Set(['data/scripts']);
@@ -1367,30 +1438,33 @@ async function openTaskScriptPicker() {
 function renderTaskScriptPicker() {
   const keyword = els.taskScriptPickerSearchInput.value.trim().toLowerCase();
   const keywordChanged = keyword !== state.taskScriptPickerLastKeyword;
-  state.taskScriptPickerLastKeyword = keyword;
-  const rows = state.scripts
-    .filter((item) => SCRIPT_FILE_EXTENSIONS.some((ext) => item.path.toLowerCase().endsWith(ext)))
-    .filter((item) => {
-      if (!keyword) return true;
-      return item.path.toLowerCase().includes(keyword) || item.name.toLowerCase().includes(keyword);
-    });
-
   els.taskScriptPickerSelectionText.textContent = `已选择 ${state.taskScriptPickerSelectedPaths.size} 个脚本`;
   els.clearTaskScriptPickerButton.disabled = state.taskScriptPickerSelectedPaths.size === 0;
   els.confirmTaskScriptPickerButton.disabled = state.taskScriptPickerSelectedPaths.size === 0;
-  if (!rows.length) {
-    state.taskScriptPickerVisibleTree = undefined;
-    setHtml(els.taskScriptPickerList, '<div class="empty">暂无可选脚本，请先在脚本管理或订阅管理中保存脚本。</div>');
-    return;
-  }
 
-  const tree = buildScriptTree(rows);
-  state.taskScriptPickerVisibleTree = tree;
-  if (keyword && keywordChanged) {
-    for (const dirPath of collectScriptDirPaths(tree)) {
-      state.taskScriptPickerExpandedDirs.add(dirPath);
+  if (keywordChanged || !state.taskScriptPickerVisibleTree) {
+    state.taskScriptPickerLastKeyword = keyword;
+    const rows = state.scripts
+      .filter((item) => SCRIPT_FILE_EXTENSIONS.some((ext) => item.path.toLowerCase().endsWith(ext)))
+      .filter((item) => {
+        if (!keyword) return true;
+        return item.path.toLowerCase().includes(keyword) || item.name.toLowerCase().includes(keyword);
+      });
+
+    if (!rows.length) {
+      state.taskScriptPickerVisibleTree = undefined;
+      setHtml(els.taskScriptPickerList, '<div class="empty">暂无可选脚本，请先在脚本管理或订阅管理中保存脚本。</div>');
+      return;
+    }
+
+    state.taskScriptPickerVisibleTree = buildScriptTree(rows);
+    if (keyword) {
+      for (const dirPath of collectScriptDirPaths(state.taskScriptPickerVisibleTree)) {
+        state.taskScriptPickerExpandedDirs.add(dirPath);
+      }
     }
   }
+  const tree = state.taskScriptPickerVisibleTree;
   const expandedDirs = state.taskScriptPickerExpandedDirs;
   syncVisibleScriptDirectories(tree, expandedDirs);
   setHtml(els.taskScriptPickerList, `<div class="script-tree script-picker-tree">${renderTaskScriptPickerTreeChildren(tree, 0, expandedDirs)}</div>`);
@@ -1419,11 +1493,9 @@ function scheduleTaskScriptPickerRender() {
 }
 
 function renderTaskScriptPickerTreeChildren(node, depth, expandedDirs) {
-  const dirs = [...node.dirs.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  const files = [...node.files].toSorted((a, b) => a.name.localeCompare(b.name));
   return [
-    ...dirs.map((dir) => renderTaskScriptPickerDirectory(dir, depth, expandedDirs)),
-    ...files.map((file) => renderTaskScriptPickerFile(file, depth))
+    ...node.sortedDirs.map((dir) => renderTaskScriptPickerDirectory(dir, depth, expandedDirs)),
+    ...node.sortedFiles.map((file) => renderTaskScriptPickerFile(file, depth))
   ].join('');
 }
 
@@ -2389,7 +2461,9 @@ function handleEnvTableChange(event) {
 async function refreshEnvs() {
   const envs = await api.listEnvs();
   state.envs = envs.items || [];
+  state.dataLoaded.envs = true;
   state.selectedEnvIds = keepExistingSelection(state.selectedEnvIds, state.envs.map((item) => item.id));
+  state.overview = deriveWorkspaceOverview();
   renderMetrics();
   renderEnvs();
 }
@@ -2614,6 +2688,8 @@ function updateSubscriptionButtons() {
 async function refreshSubscriptions() {
   const subscriptions = await api.listSubscriptions();
   state.subscriptions = subscriptions.items || [];
+  state.dataLoaded.subscriptions = true;
+  state.overview = deriveWorkspaceOverview();
   renderSubscriptions();
 }
 
@@ -2971,6 +3047,7 @@ function handleConfigListClick(event) {
 async function refreshConfigs() {
   const result = await api.listConfigs();
   state.configs = result.items || [];
+  state.dataLoaded.configs = true;
   renderConfigs();
 }
 
@@ -3007,9 +3084,9 @@ async function openCurrentConfigDirectory() {
 
 async function refreshScripts() {
   const scripts = await api.listScripts();
-  state.scripts = scripts.items || [];
-  state.scriptTree = undefined;
+  setScripts(scripts.items || []);
   state.selectedScriptPaths = keepExistingSelection(state.selectedScriptPaths, state.scripts.map((item) => item.path));
+  state.overview = deriveWorkspaceOverview();
   renderMetrics();
   renderScripts();
 }
@@ -3096,7 +3173,7 @@ function buildScriptTree(scripts) {
     }
     current.files.push({ ...item, name: fileName || item.name });
   }
-  return root;
+  return finalizeScriptTree(root);
 }
 
 function createScriptTreeNode(name, nodePath) {
@@ -3105,16 +3182,28 @@ function createScriptTreeNode(name, nodePath) {
     path: nodePath,
     dirs: new Map(),
     files: [],
-    scriptPaths: []
+    scriptPaths: [],
+    sortedDirs: [],
+    sortedFiles: [],
+    dirPaths: []
   };
 }
 
+function finalizeScriptTree(node) {
+  node.sortedDirs = [...node.dirs.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  node.sortedFiles = [...node.files].toSorted((a, b) => a.name.localeCompare(b.name));
+  node.dirPaths = [];
+  for (const dir of node.sortedDirs) {
+    finalizeScriptTree(dir);
+    node.dirPaths.push(dir.path, ...dir.dirPaths);
+  }
+  return node;
+}
+
 function renderScriptTreeChildren(node, depth) {
-  const dirs = [...node.dirs.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  const files = [...node.files].toSorted((a, b) => a.name.localeCompare(b.name));
   return [
-    ...dirs.map((dir) => renderScriptDirectory(dir, depth)),
-    ...files.map((file) => renderScriptFile(file, depth))
+    ...node.sortedDirs.map((dir) => renderScriptDirectory(dir, depth)),
+    ...node.sortedFiles.map((file) => renderScriptFile(file, depth))
   ].join('');
 }
 
@@ -3127,10 +3216,7 @@ function syncVisibleScriptDirectories(tree, expandedDirs = state.expandedScriptD
 }
 
 function collectScriptDirPaths(node) {
-  return [...node.dirs.values()].flatMap((dir) => [
-    dir.path,
-    ...collectScriptDirPaths(dir)
-  ]);
+  return node?.dirPaths || [];
 }
 
 function renderScriptDirectory(node, depth) {
@@ -3168,8 +3254,8 @@ function renderScriptFile(item, depth) {
 
 function collectVisibleScriptPaths(node) {
   return [
-    ...node.files.map((item) => item.path),
-    ...[...node.dirs.values()].flatMap((child) => collectVisibleScriptPaths(child))
+    ...node.sortedFiles.map((item) => item.path),
+    ...node.sortedDirs.flatMap((child) => collectVisibleScriptPaths(child))
   ];
 }
 
@@ -3206,9 +3292,8 @@ function toggleScriptDirectory(dirPath) {
 }
 
 function toggleScriptDirectorySelection(dirPath, checked) {
-  const paths = state.scripts
-    .map((item) => item.path)
-    .filter((scriptPath) => scriptPath.startsWith(`${dirPath}/`));
+  const node = findScriptTreeNode(getScriptTree(), dirPath);
+  const paths = node ? collectScriptPaths(node) : [];
   for (const scriptPath of paths) {
     toggleSet(state.selectedScriptPaths, scriptPath, checked);
   }
@@ -3281,8 +3366,8 @@ async function saveCurrentScript() {
     state.currentScriptPath = result.path;
     els.scriptPathInput.value = result.path;
     const scripts = await api.listScripts();
-    state.scripts = scripts.items || [];
-    state.scriptTree = undefined;
+    setScripts(scripts.items || []);
+    state.overview = deriveWorkspaceOverview();
     renderMetrics();
     renderScripts();
     toast('脚本已保存');
@@ -3368,8 +3453,8 @@ async function deleteCurrentScript() {
     els.scriptPathInput.value = '';
     els.scriptEditor.value = '';
     const scripts = await api.listScripts();
-    state.scripts = scripts.items || [];
-    state.scriptTree = undefined;
+    setScripts(scripts.items || []);
+    state.overview = deriveWorkspaceOverview();
     renderMetrics();
     renderScripts();
     toast('脚本已删除');
@@ -3444,6 +3529,8 @@ async function refreshDependencies() {
   const dependencies = await api.listDependencies();
   state.dependencies = dependencies.items || [];
   state.dependencyHistory = dependencies.history || [];
+  state.dataLoaded.dependencies = true;
+  state.overview = deriveWorkspaceOverview();
   renderDependencies();
 }
 
@@ -3497,7 +3584,10 @@ async function installDependency() {
     const result = await api.installDependency(name);
     state.dependencies = result.items || [];
     state.dependencyHistory = result.history || [];
+    state.dataLoaded.dependencies = true;
+    state.overview = deriveWorkspaceOverview();
     els.dependencyNameInput.value = '';
+    renderMetrics();
     renderDependencies();
     toast(`依赖安装完成: ${name}`, { tone: 'success', durationMs: 7000 });
   } catch (error) {
@@ -3520,6 +3610,9 @@ async function removeDependency(name) {
     const result = await api.removeDependency(name);
     state.dependencies = result.items || [];
     state.dependencyHistory = result.history || [];
+    state.dataLoaded.dependencies = true;
+    state.overview = deriveWorkspaceOverview();
+    renderMetrics();
     renderDependencies();
     toast('依赖已卸载');
   } catch (error) {
@@ -4004,7 +4097,7 @@ function upsertRunRecord(run) {
   } else {
     state.runs.unshift(run);
   }
-  state.runs = state.runs.toSorted((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  setRuns(state.runs.toSorted((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime()));
 }
 
 function groupRunsByScript(runs) {
@@ -4048,7 +4141,7 @@ function getRunDisplayInfo(run, task) {
 }
 
 function latestRunForTask(taskId) {
-  return state.runs.find((run) => run.taskId === taskId);
+  return state.latestRunByTaskId.get(taskId);
 }
 
 function formatSchedule(task) {
@@ -4066,7 +4159,13 @@ function formatNextRun(task) {
   if (!task.enabled) return '-';
   if (task.cronExpression === '@once') return '仅手动';
   if (task.cronExpression === '@boot') return '下次开机';
-  return estimateNextRun(task.cronExpression);
+  const minuteBucket = Math.floor(Date.now() / 60000);
+  const cacheKey = `${task.cronExpression || ''}|${minuteBucket}`;
+  if (state.nextRunCache.has(cacheKey)) return state.nextRunCache.get(cacheKey);
+  if (state.nextRunCache.size > 600) state.nextRunCache.clear();
+  const value = estimateNextRun(task.cronExpression);
+  state.nextRunCache.set(cacheKey, value);
+  return value;
 }
 
 function estimateNextRun(cron) {
@@ -4119,6 +4218,9 @@ function upsertSubscription(subscription) {
   } else {
     state.subscriptions.unshift(subscription);
   }
+  state.dataLoaded.subscriptions = true;
+  state.overview = deriveWorkspaceOverview();
+  renderMetrics();
   renderSubscriptions();
 }
 

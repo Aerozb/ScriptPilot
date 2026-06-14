@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import http from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -208,6 +208,50 @@ await check('定时任务排序设置会拒绝已取消的列', async () => {
     });
     assert(saved.crontab.sort.field === 'pinned', `排序字段未回退: ${saved.crontab.sort.field}`);
     assert(saved.crontab.sort.direction === 'ASC', '合法排序方向应保留');
+  } finally {
+    await rm(portableRoot, { recursive: true, force: true });
+  }
+});
+
+await check('工作区概览使用轻量计数且结果正确', async () => {
+  const portableRoot = await mkdtemp(path.join(tmpdir(), 'scriptpilot-overview-'));
+  try {
+    const app = await createApp({ portableRoot });
+    const dataRoot = path.join(portableRoot, 'data');
+    await mkdir(path.join(dataRoot, 'scripts', 'nested'), { recursive: true });
+    await writeFile(path.join(dataRoot, 'scripts', 'overview-a.js'), 'console.log("a");', 'utf8');
+    await writeFile(path.join(dataRoot, 'scripts', 'nested', 'overview-b.js'), 'console.log("b");', 'utf8');
+    await writeFile(path.join(dataRoot, 'package.json'), JSON.stringify({
+      dependencies: {
+        axios: '^1.0.0',
+        lodash: '^4.0.0'
+      }
+    }), 'utf8');
+    await app.services.workspaceService.saveEnv({
+      name: 'SP_OVERVIEW_ENABLED',
+      value: '1',
+      status: 'enabled'
+    });
+    await app.services.workspaceService.saveEnv({
+      name: 'SP_OVERVIEW_DISABLED',
+      value: '0',
+      status: 'disabled'
+    });
+    await app.services.workspaceService.saveSubscription({
+      name: 'overview-subscription',
+      url: 'owner/repo',
+      schedule: ''
+    });
+
+    const [overview, scripts] = await Promise.all([
+      app.services.workspaceService.getOverview(),
+      app.services.workspaceService.listScripts()
+    ]);
+    assert(overview.envCount === 2, `环境变量数量异常: ${overview.envCount}`);
+    assert(overview.enabledEnvCount === 1, `启用环境变量数量异常: ${overview.enabledEnvCount}`);
+    assert(overview.subscriptionCount === 1, `订阅数量异常: ${overview.subscriptionCount}`);
+    assert(overview.scriptCount === scripts.items.length, `脚本数量与列表不一致: ${overview.scriptCount}/${scripts.items.length}`);
+    assert(overview.dependencyCount === 2, `依赖数量异常: ${overview.dependencyCount}`);
   } finally {
     await rm(portableRoot, { recursive: true, force: true });
   }

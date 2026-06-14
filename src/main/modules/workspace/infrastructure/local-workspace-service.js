@@ -44,18 +44,18 @@ export class LocalWorkspaceService {
   }
 
   async getOverview() {
-    const [envs, subscriptions, scripts, dependencies] = await Promise.all([
-      this.listEnvs(),
-      this.listSubscriptions(),
-      this.listScripts(),
-      this.listDependencies()
+    const [envs, subscriptions, scriptCount, packageJson] = await Promise.all([
+      this.envStore.read(),
+      this.subscriptionStore.read(),
+      countFilesRecursive(this.scriptRoot),
+      readJsonOptional(path.join(this.paths.dataRoot, 'package.json'), { dependencies: {} })
     ]);
     return {
-      envCount: envs.items.length,
-      enabledEnvCount: envs.items.filter((item) => item.status === 'enabled').length,
-      subscriptionCount: subscriptions.items.length,
-      scriptCount: scripts.items.length,
-      dependencyCount: dependencies.items.length,
+      envCount: envs.length,
+      enabledEnvCount: envs.filter((item) => item.status === 'enabled').length,
+      subscriptionCount: subscriptions.length,
+      scriptCount,
+      dependencyCount: Object.keys(packageJson.dependencies || {}).length,
       paths: {
         dataRoot: this.paths.dataRoot,
         scriptsRoot: this.paths.scriptsRoot,
@@ -571,6 +571,27 @@ async function listFilesRecursive(root, current) {
   }));
   const items = groups.flat();
   return items.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+async function countFilesRecursive(current) {
+  let count = 0;
+  const pending = [current];
+  while (pending.length) {
+    const dir = pending.pop();
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) pending.push(path.join(dir, entry.name));
+      else if (entry.isFile()) count += 1;
+    }
+  }
+  return count;
 }
 
 async function pullSubscriptionFiles(input) {
