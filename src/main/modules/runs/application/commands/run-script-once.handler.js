@@ -177,6 +177,18 @@ function normalizeInput(input) {
     throw new AppError('SCRIPT_REQUIRED', '必须提供 scriptPath 或 scriptContent');
   }
 
+  if (input.scriptPath !== undefined && typeof input.scriptPath !== 'string') {
+    throw new AppError('INVALID_SCRIPT_PATH', 'scriptPath 必须是字符串');
+  }
+
+  if (input.scriptContent !== undefined && typeof input.scriptContent !== 'string') {
+    throw new AppError('INVALID_SCRIPT_CONTENT', 'scriptContent 必须是字符串');
+  }
+
+  if (input.cwd !== undefined && typeof input.cwd !== 'string') {
+    throw new AppError('INVALID_CWD', 'cwd 必须是字符串');
+  }
+
   if (input.args !== undefined && !Array.isArray(input.args)) {
     throw new AppError('INVALID_ARGS', 'args 必须是字符串数组');
   }
@@ -193,6 +205,10 @@ function normalizeInput(input) {
     throw new AppError('INVALID_DEPENDENCIES', 'dependencies 必须是字符串数组');
   }
 
+  if (input.timeoutMs !== undefined && (!Number.isInteger(input.timeoutMs) || input.timeoutMs < 0)) {
+    throw new AppError('INVALID_TIMEOUT', '超时时间 timeoutMs 必须是非负整数');
+  }
+
   return {
     name: typeof input.name === 'string' && input.name.trim() ? input.name.trim() : '接口运行脚本',
     scriptPath: input.scriptPath,
@@ -205,7 +221,7 @@ function normalizeInput(input) {
     autoInstallDependencies: input.autoInstallDependencies !== false,
     forceDependencyCheck: input.forceDependencyCheck === true,
     waitForCompletion: input.waitForCompletion !== false,
-    timeoutMs: Number.isInteger(input.timeoutMs) ? input.timeoutMs : 30000
+    timeoutMs: input.timeoutMs === undefined ? 30000 : input.timeoutMs
   };
 }
 

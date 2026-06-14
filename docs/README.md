@@ -17,6 +17,6 @@
 - [Claude 入口](../CLAUDE.md)：只引用 AGENTS 入口，不重复维护规范。
 - [ScriptPilot 维护 Skill](ai/skills/scriptpilot-maintenance/SKILL.md)：仓库内 skill 结构，按需读取代码规范、项目规范和产物规范。
 
-## 发布产物
+## 维护者提示
 
-构建输出位于 `release/win-unpacked/`，源码仓库不提交 `release/`。发 GitHub Release 时，压缩包必须排除 `app/data/`。
+构建、验收、发版和产物打包规则统一看 [开发维护说明](development.md) 与仓库内 AI skill 规范。文档索引不重复维护发布细节。

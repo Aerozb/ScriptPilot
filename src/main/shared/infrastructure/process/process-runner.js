@@ -102,7 +102,7 @@ export function stopRunningNodeScript(runId) {
   if (!child) return false;
   child.kill('SIGTERM');
   setTimeout(() => {
-    if (!child.killed) child.kill('SIGKILL');
+    if (runningProcesses.get(runId) === child) child.kill('SIGKILL');
   }, 1500).unref?.();
   return true;
 }

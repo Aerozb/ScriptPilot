@@ -8,6 +8,7 @@ import { createApp } from '../src/main/app/create-app.js';
 import { createTaskCommand } from '../src/main/modules/tasks/application/commands/create-task.command.js';
 import { updateTaskCommand } from '../src/main/modules/tasks/application/commands/update-task.command.js';
 import { listTasksQuery } from '../src/main/modules/tasks/application/queries/list-tasks.query.js';
+import { runScriptOnceCommand } from '../src/main/modules/runs/application/commands/run-script-once.command.js';
 import { Task } from '../src/main/modules/tasks/domain/task.aggregate.js';
 import { TaskScheduler } from '../src/main/modules/scheduler/infrastructure/task-scheduler.js';
 import { assertValidCronExpression } from '../src/main/modules/scheduler/infrastructure/cron-expression.js';
@@ -33,9 +34,11 @@ await check('JS 语法检查覆盖关键入口', async () => {
     'src/main/modules/tasks/application/task-schedule-validation.js',
     'src/main/modules/tasks/application/commands/create-task.handler.js',
     'src/main/modules/tasks/application/commands/update-task.handler.js',
+    'src/main/modules/runs/application/commands/run-script-once.handler.js',
     'src/main/modules/settings/infrastructure/json-settings-repository.js',
     'src/main/modules/workspace/infrastructure/local-workspace-service.js',
     'src/main/modules/updates/infrastructure/github-update-service.js',
+    'src/main/shared/infrastructure/process/process-runner.js',
     'tools/human-acceptance.mjs',
     'tools/quality-check.mjs'
   ];
@@ -151,6 +154,38 @@ await check('任务创建和更新会校验主 Cron 与额外 Cron', async () =>
         cwd: 'data'
       })),
       '无效额外定时规则不应创建成功'
+    );
+  } finally {
+    await rm(portableRoot, { recursive: true, force: true });
+  }
+});
+
+await check('接口直接运行脚本会拒绝无效输入', async () => {
+  const portableRoot = await mkdtemp(path.join(tmpdir(), 'scriptpilot-run-validation-'));
+  try {
+    const app = await createApp({ portableRoot });
+    await assertRejects(
+      () => app.commandBus.execute(runScriptOnceCommand({
+        name: 'bad-timeout',
+        scriptContent: 'console.log("should not run");',
+        timeoutMs: -1
+      })),
+      '直接运行脚本不应接受负超时时间'
+    );
+    await assertRejects(
+      () => app.commandBus.execute(runScriptOnceCommand({
+        name: 'bad-script-content',
+        scriptContent: { code: 'console.log(1)' }
+      })),
+      '直接运行脚本不应接受非字符串脚本内容'
+    );
+    await assertRejects(
+      () => app.commandBus.execute(runScriptOnceCommand({
+        name: 'bad-cwd',
+        scriptContent: 'console.log("bad cwd");',
+        cwd: ['data']
+      })),
+      '直接运行脚本不应接受非字符串工作目录'
     );
   } finally {
     await rm(portableRoot, { recursive: true, force: true });
