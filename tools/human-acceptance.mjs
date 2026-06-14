@@ -348,6 +348,12 @@ try {
       assert(await argsHelp.getAttribute('aria-expanded') === 'true', '字段提示点击后没有标记展开状态');
       await expectText(page, '#taskModal', 'process.argv.slice(2)');
       await expectText(page, '#taskModal', 'SCRIPTPILOT_PARAMS');
+
+      const dependenciesHelp = page.locator('#taskModal .help-icon[aria-label="声明依赖说明"]');
+      await dependenciesHelp.click();
+      await expectText(page, '#helpTooltip', '脚本需要的 npm 包名');
+      await expectText(page, '#taskModal', 'data/node_modules');
+      await expectText(page, '#taskModal', "import axios from 'axios'");
     } finally {
       await closeDialogIfOpen(page, '#taskModal');
     }

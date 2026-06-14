@@ -190,6 +190,65 @@ console.log(params.关键词);
 - 两个字段可以同时用，脚本分别从 `process.argv.slice(2)` 和 `process.env.SCRIPTPILOT_PARAMS` 读取。
 - 不需要传参数时，命令行参数留空，结构化参数保持 `{}` 或默认示例即可。
 
+### 声明依赖怎么填
+
+“声明依赖，每行一个，可留空”用于告诉 ScriptPilot：这个任务运行前需要哪些 npm 包。
+
+这里填的是 npm 包名，不是脚本路径，也不是变量名。
+
+例如你的脚本要请求网页并处理时间，可以这样填：
+
+```text
+axios
+dayjs
+```
+
+运行任务时，ScriptPilot 会检查 `app/data/node_modules` 里有没有这些包。缺少时会自动安装到 `app/data/node_modules`，不会安装到系统 Node，也不会写到 AppData。
+
+填了依赖只表示“运行前准备这些包”。脚本里仍然要自己引入后才能使用。
+
+ESM 写法示例：
+
+```js
+import axios from "axios";
+import dayjs from "dayjs";
+
+const response = await axios.get("https://example.com");
+console.log(dayjs().format("YYYY-MM-DD HH:mm:ss"));
+console.log(response.status);
+```
+
+CommonJS 写法示例：
+
+```js
+const axios = require("axios");
+const dayjs = require("dayjs");
+
+axios.get("https://example.com").then((response) => {
+  console.log(dayjs().format("YYYY-MM-DD HH:mm:ss"));
+  console.log(response.status);
+});
+```
+
+什么时候需要填：
+
+- 脚本里用了第三方 npm 包，例如 `axios`、`dayjs`、`lodash`。
+- 脚本自动识别依赖失败，但你知道它需要哪个包。
+- 想在第一次运行前明确安装好依赖，避免运行时才发现缺包。
+
+什么时候不用填：
+
+- 只用了 Node 内置模块，例如 `fs`、`path`、`crypto`。
+- 脚本不需要第三方包。
+- 依赖已经在“依赖管理”里手动安装，而且脚本也能正常运行。
+
+注意：
+
+- 每行只写一个包名，例如 `axios`。
+- 不要写 `import axios from "axios"`，这里不是写代码的地方。
+- 不要写脚本文件路径，例如 `data/scripts/a.js`。
+- 如果依赖名称写错，保存或运行时会提示格式错误。
+
 ## 7. Cron 表达式生成器
 
 Cron 用来表示“什么时候运行任务”。不会写也没关系，点击任务弹窗里的“生成表达式”即可。
@@ -289,6 +348,8 @@ ScriptPilot 使用 5 段 Cron：
 - 缺依赖时自动安装。
 
 这里的“命令行参数”和“结构化参数 JSON”用法与创建任务一致：简单值用命令行参数，多项配置用 JSON 参数。
+
+这里的“依赖，每行一个”也与创建任务里的“声明依赖”一致：填脚本需要的 npm 包名，勾选“缺依赖时自动安装到 data/node_modules”后，直接运行前会自动安装缺少的依赖。
 
 输入错误时会提示，例如 JSON 格式错误、路径不在便携目录内、路径不是 `.js` 文件等。
 
