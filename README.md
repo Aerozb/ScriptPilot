@@ -2,6 +2,29 @@
 
 ScriptPilot 是一个 Windows 绿色便携版 NodeJS 脚本调度器。它不需要登录账号，也不需要额外安装 Node，解压后双击启动，就能在本机管理脚本、定时任务、订阅、环境变量、依赖和运行日志。
 
+## 界面预览
+
+**定时任务** —— 青龙式任务表格，支持批量运行、启停、置顶和实时日志弹窗：
+
+![定时任务](docs/screenshots/tasks.png)
+
+**脚本管理** —— 目录树 + 在线编辑，保存即生效：
+
+![脚本管理](docs/screenshots/scripts.png)
+
+**环境变量** —— 变量值遮罩显示，兼容青龙脚本习惯：
+
+![环境变量](docs/screenshots/envs.png)
+
+**日志管理** —— 任务、手动运行和订阅拉取的日志集中查看：
+
+![日志管理](docs/screenshots/logs.png)
+
+**系统设置** —— 绿色目录一目了然，支持开机启动、日志清理、主题外观和本机 API：
+
+![系统设置](docs/screenshots/settings.png)
+
+
 ## 下载和启动
 
 1. 在 GitHub Release 下载 `ScriptPilot-win-unpacked.zip`。
