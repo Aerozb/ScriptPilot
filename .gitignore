@@ -1,0 +1,10 @@
+node_modules/
+.tools/
+data/
+release/
+runtime/refs/qinglong/
+release/builder-debug.yml
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
